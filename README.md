@@ -223,9 +223,21 @@ metering_point_id + direction + metric_key + interval_start
 
 ## Entwicklung
 
+Optional Git-Hooks mit `prek` installieren:
+
+```sh
+uv tool install prek
+prek install
+prek run --all-files
+```
+
+Die `prek` Hooks formatieren Go-Code, halten `go.mod`/`go.sum` ordentlich, pruefen YAML/Hygiene, laufen mit `go vet`, fuehren Staticcheck aus und starten `go test ./...`.
+
 ```sh
 gofmt -w cmd internal
 go test ./...
+go test ./... -race -covermode=atomic -coverprofile=coverage.out
+go tool cover -func=coverage.out
 ```
 
 Optionaler Parser-Test mit echter XLSX-Datei:
@@ -233,6 +245,8 @@ Optionaler Parser-Test mit echter XLSX-Datei:
 ```sh
 EEG_SAMPLE_XLSX=./imports/report.xlsx go test ./internal/imports
 ```
+
+Die End-to-End-Szenarien laufen Go-nativ als Teil von `go test ./...` unter `internal/e2e`. Sie starten den echten Router mit temp. SQLite-Datenbanken und pruefen Login, XLSX-Upload, API-Importe, Teilnehmer-Sichtbarkeit und EDA-Import gegen einen Fake-EDA-Server.
 
 ## Projektstruktur
 

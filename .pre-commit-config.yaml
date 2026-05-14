@@ -1,0 +1,46 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: gofmt -w cmd internal
+        language: system
+        files: \.go$
+        pass_filenames: false
+
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy
+        language: system
+        files: ^(go\.mod|go\.sum|.*\.go)$
+        pass_filenames: false
+
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        files: \.go$
+        pass_filenames: false
+
+      - id: staticcheck
+        name: staticcheck
+        entry: go run honnef.co/go/tools/cmd/staticcheck@2026.1 ./...
+        language: system
+        files: \.go$
+        pass_filenames: false
+
+      - id: go-test
+        name: go test
+        entry: go test ./...
+        language: system
+        files: (\.go$|^internal/e2e/features/.*\.feature$)
+        pass_filenames: false

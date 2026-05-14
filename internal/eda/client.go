@@ -37,12 +37,12 @@ const (
 	directionConsumption = "CONSUMPTION"
 	directionGeneration  = "GENERATION"
 
-	metricTotalConsumptionKey  = "gesamtverbrauch_lt_messung_bei_teilnahme_gem_erzeugung_kwh"
-	metricTotalConsumption     = "Gesamtverbrauch lt. Messung (bei Teilnahme gem. Erzeugung) [KWH]"
+	metricTotalConsumptionKey  = db.MetricTotalConsumptionKey
+	metricTotalConsumption     = db.MetricTotalConsumptionLabel
 	metricFactorConsumptionKey = "verbrauch_lt_messung_entsprechend_dem_teilnahmefaktor_je_zp_und_ec_id_kwh"
 	metricFactorConsumption    = "Verbrauch lt. Messung entsprechend dem Teilnahmefaktor je ZP und EC-ID [KWH]"
-	metricCommunityShareKey    = "anteil_gemeinschaftliche_erzeugung_kwh"
-	metricCommunityShare       = "Anteil gemeinschaftliche Erzeugung [KWH]"
+	metricCommunityShareKey    = db.MetricCommunityShareKey
+	metricCommunityShare       = db.MetricCommunityShareLabel
 	metricOwnCommunityKey      = "eigendeckung_gemeinschaftliche_erzeugung_kwh"
 	metricOwnCommunity         = "Eigendeckung gemeinschaftliche Erzeugung [KWH]"
 	metricOwnRenewableKey      = "eigendeckung_aus_erneuerbarer_energie_kwh"

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ben/eeg-sumsum/internal/auth"
 	"github.com/ben/eeg-sumsum/internal/db"
@@ -66,6 +68,100 @@ func TestParticipantCannotAccessUnassignedMeter(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestParticipantDashboardShowsSimplifiedSummary(t *testing.T) {
+	ctx := context.Background()
+	database := testDB(t)
+	hash, err := auth.HashPassword("secret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateUser(ctx, "teilnehmer", "Teilnehmer", hash, db.RoleParticipant, true); err != nil {
+		t.Fatal(err)
+	}
+	user, err := database.UserByUsername(ctx, "teilnehmer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, meter := range []db.MeteringPoint{
+		{ID: "AT001", Direction: "CONSUMPTION"},
+		{ID: "AT002", Direction: "CONSUMPTION"},
+		{ID: "AT003", Direction: "CONSUMPTION"},
+		{ID: "TOTAL", Direction: "CONSUMPTION"},
+	} {
+		if err := database.UpsertMeteringPoint(ctx, nil, meter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.AssignMeters(ctx, user.ID, []string{"AT001", "AT002"}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(15 * time.Minute)
+	batchID, err := database.UpsertImportBatch(ctx, nil, db.ImportBatch{
+		Filename:    "report.xlsx",
+		SHA256:      "participant-summary",
+		ReportStart: &start,
+		ReportEnd:   &end,
+		DataStart:   &start,
+		DataEnd:     &end,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurements := []db.Measurement{
+		{MeteringPointID: "AT001", Direction: "CONSUMPTION", MetricKey: db.MetricCommunityShareKey, MetricLabel: db.MetricCommunityShareLabel, IntervalStart: start, Value: 50},
+		{MeteringPointID: "AT001", Direction: "CONSUMPTION", MetricKey: db.MetricTotalConsumptionKey, MetricLabel: db.MetricTotalConsumptionLabel, IntervalStart: start, Value: 200},
+		{MeteringPointID: "AT002", Direction: "CONSUMPTION", MetricKey: db.MetricCommunityShareKey, MetricLabel: db.MetricCommunityShareLabel, IntervalStart: start, Value: 300},
+		{MeteringPointID: "AT002", Direction: "CONSUMPTION", MetricKey: db.MetricTotalConsumptionKey, MetricLabel: db.MetricTotalConsumptionLabel, IntervalStart: start, Value: 600},
+		{MeteringPointID: "AT003", Direction: "CONSUMPTION", MetricKey: db.MetricCommunityShareKey, MetricLabel: db.MetricCommunityShareLabel, IntervalStart: start, Value: 700},
+		{MeteringPointID: "AT003", Direction: "CONSUMPTION", MetricKey: db.MetricTotalConsumptionKey, MetricLabel: db.MetricTotalConsumptionLabel, IntervalStart: start, Value: 700},
+		{MeteringPointID: "TOTAL", Direction: "CONSUMPTION", MetricKey: db.MetricCommunityShareKey, MetricLabel: db.MetricCommunityShareLabel, IntervalStart: start, Value: 999},
+		{MeteringPointID: "TOTAL", Direction: "CONSUMPTION", MetricKey: db.MetricTotalConsumptionKey, MetricLabel: db.MetricTotalConsumptionLabel, IntervalStart: start, Value: 999},
+	}
+	for _, measurement := range measurements {
+		if _, err := database.UpsertMeasurement(ctx, nil, measurement, batchID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := New(database, true)
+	client, baseURL := testClient(app.Routes())
+	login(t, client, baseURL, "teilnehmer", "secret123")
+
+	resp, err := client.Get(baseURL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(body)
+	for _, want := range []string{
+		db.MetricCommunityShareLabel,
+		db.MetricTotalConsumptionLabel,
+		"50.000 kWh",
+		"200.000 kWh",
+		"300.000 kWh",
+		"600.000 kWh",
+		"25.0%",
+		"50.0%",
+		"coverage-chart",
+		`href="/meters/AT001"`,
+		`href="/meters/AT002"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("dashboard body does not contain %q: %s", want, page)
+		}
+	}
+	for _, forbidden := range []string{"350.000 kWh", "700.000 kWh", "800.000 kWh", "999.000 kWh", "43.8%"} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("dashboard body contains forbidden aggregate %q: %s", forbidden, page)
+		}
 	}
 }
 
@@ -228,6 +324,99 @@ func TestParticipantMustChangeInitialPassword(t *testing.T) {
 	}
 	if updated.PasswordChangeRequired {
 		t.Fatal("password change flag is still set")
+	}
+}
+
+func TestAdminCanImpersonateParticipantAndReturn(t *testing.T) {
+	ctx := context.Background()
+	database := testDB(t)
+	hash, err := auth.HashPassword("secret12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateUser(ctx, "admin", "Admin", hash, db.RoleAdmin, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateUser(ctx, "teilnehmer", "Teilnehmer", hash, db.RoleParticipant, true); err != nil {
+		t.Fatal(err)
+	}
+	participant, err := database.UserByUsername(ctx, "teilnehmer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdatePassword(ctx, participant.ID, hash, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, meter := range []db.MeteringPoint{
+		{ID: "AT001", Direction: "CONSUMPTION"},
+		{ID: "AT002", Direction: "CONSUMPTION"},
+	} {
+		if err := database.UpsertMeteringPoint(ctx, nil, meter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.AssignMeters(ctx, participant.ID, []string{"AT001"}); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New(database, true)
+	client, baseURL := testClient(app.Routes())
+	login(t, client, baseURL, "admin", "secret12345")
+
+	resp, err := client.Get(baseURL + "/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), fmt.Sprintf(`/admin/users/%d/impersonate`, participant.ID)) {
+		t.Fatalf("admin body does not contain impersonation form: %s", string(body))
+	}
+
+	resp, err = client.Post(baseURL+fmt.Sprintf("/admin/users/%d/impersonate", participant.ID), "application/x-www-form-urlencoded", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(body)
+	for _, want := range []string{"Als Teilnehmer", "Zurück zu Admin", `href="/meters/AT001"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("impersonated dashboard does not contain %q: %s", want, page)
+		}
+	}
+	for _, forbidden := range []string{"Passwort ändern", `href="/meters/AT002"`} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("impersonated dashboard contains forbidden %q: %s", forbidden, page)
+		}
+	}
+
+	resp, err = client.Get(baseURL + "/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("impersonated admin status = %d, want 403", resp.StatusCode)
+	}
+
+	resp, err = client.Post(baseURL+"/impersonation/stop", "application/x-www-form-urlencoded", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Administration") {
+		t.Fatalf("stop impersonation body does not contain admin page: %s", string(body))
 	}
 }
 

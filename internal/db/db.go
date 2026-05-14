@@ -554,6 +554,9 @@ ORDER BY mp.id`, user.ID)
 
 func (db *DB) Meter(ctx context.Context, id string, user *User) (MeterOverview, error) {
 	if user != nil && !user.IsAdmin() {
+		if id == "TOTAL" {
+			return MeterOverview{}, sql.ErrNoRows
+		}
 		ok, err := db.UserCanAccessMeter(ctx, user.ID, id)
 		if err != nil {
 			return MeterOverview{}, err
@@ -573,6 +576,68 @@ func (db *DB) Meter(ctx context.Context, id string, user *User) (MeterOverview, 
 	}
 	m.MetricTotals, m.From, m.To = totals, from, to
 	return m, nil
+}
+
+func (db *DB) ParticipantMeterSummaries(ctx context.Context, userID int64) ([]ParticipantMeterSummary, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT mp.id, mp.display_name, mp.direction, mp.network_operator, m.metric_key, SUM(m.value), MIN(m.interval_start), MAX(m.interval_start)
+FROM metering_points mp
+JOIN user_metering_points ump ON ump.metering_point_id = mp.id
+JOIN measurements m ON m.metering_point_id = mp.id
+WHERE ump.user_id = ?
+  AND mp.id <> 'TOTAL'
+  AND m.metric_key IN (?, ?)
+GROUP BY mp.id, mp.display_name, mp.direction, mp.network_operator, m.metric_key
+ORDER BY mp.id`,
+		userID, MetricCommunityShareKey, MetricTotalConsumptionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []ParticipantMeterSummary
+	indexByMeter := map[string]int{}
+	for rows.Next() {
+		var metricKey, minS, maxS string
+		var sum float64
+		var meter MeteringPoint
+		if err := rows.Scan(&meter.ID, &meter.DisplayName, &meter.Direction, &meter.NetworkOperator, &metricKey, &sum, &minS, &maxS); err != nil {
+			return nil, err
+		}
+		i, ok := indexByMeter[meter.ID]
+		if !ok {
+			i = len(summaries)
+			indexByMeter[meter.ID] = i
+			summaries = append(summaries, ParticipantMeterSummary{MeteringPoint: meter, HasData: true})
+		}
+		summary := &summaries[i]
+		summary.HasData = true
+		switch metricKey {
+		case MetricCommunityShareKey:
+			summary.CommunityShareKWh = sum
+		case MetricTotalConsumptionKey:
+			summary.TotalConsumptionKWh = sum
+		}
+		if t, err := time.Parse(time.RFC3339, minS); err == nil {
+			if summary.From == nil || t.Before(*summary.From) {
+				summary.From = &t
+			}
+		}
+		if t, err := time.Parse(time.RFC3339, maxS); err == nil {
+			if summary.To == nil || t.After(*summary.To) {
+				summary.To = &t
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range summaries {
+		if summaries[i].TotalConsumptionKWh > 0 {
+			summaries[i].CoveragePercent = summaries[i].CommunityShareKWh / summaries[i].TotalConsumptionKWh * 100
+		}
+	}
+	return summaries, nil
 }
 
 func (db *DB) UserCanAccessMeter(ctx context.Context, userID int64, meterID string) (bool, error) {

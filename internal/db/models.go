@@ -7,6 +7,13 @@ const (
 	RoleParticipant = "participant"
 )
 
+const (
+	MetricTotalConsumptionKey   = "gesamtverbrauch_lt_messung_bei_teilnahme_gem_erzeugung_kwh"
+	MetricTotalConsumptionLabel = "Gesamtverbrauch lt. Messung (bei Teilnahme gem. Erzeugung) [KWH]"
+	MetricCommunityShareKey     = "anteil_gemeinschaftliche_erzeugung_kwh"
+	MetricCommunityShareLabel   = "Anteil gemeinschaftliche Erzeugung [KWH]"
+)
+
 type User struct {
 	ID                     int64
 	Username               string
@@ -40,6 +47,16 @@ type MeterOverview struct {
 	MetricTotals []MetricTotal
 	From         *time.Time
 	To           *time.Time
+}
+
+type ParticipantMeterSummary struct {
+	MeteringPoint
+	CommunityShareKWh   float64
+	TotalConsumptionKWh float64
+	CoveragePercent     float64
+	From                *time.Time
+	To                  *time.Time
+	HasData             bool
 }
 
 type Measurement struct {

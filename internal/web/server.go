@@ -74,6 +74,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/admin/eda-imports", s.apiEDAImport)
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireLogin)
+		r.Post("/impersonation/stop", s.stopImpersonating)
 		r.Get("/password/change", s.passwordChangeForm)
 		r.Post("/password/change", s.passwordChange)
 	})
@@ -92,6 +93,7 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/admin/users", s.createUser)
 		r.Get("/admin/users/{id}", s.editUserForm)
 		r.Post("/admin/users/{id}", s.updateUser)
+		r.Post("/admin/users/{id}/impersonate", s.impersonateUser)
 		r.Post("/admin/imports", s.adminImport)
 		r.Post("/admin/eda-imports", s.adminEDAImport)
 	})
@@ -138,12 +140,21 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	user := s.currentUser(r.Context())
+	var participantSummaries []db.ParticipantMeterSummary
+	if !user.IsAdmin() {
+		summaries, err := s.DB.ParticipantMeterSummaries(r.Context(), user.ID)
+		if err != nil {
+			s.serverError(w, r, err)
+			return
+		}
+		participantSummaries = summaries
+	}
 	meters, err := s.DB.MeteringPoints(r.Context(), &user)
 	if err != nil {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, views.Dashboard(user, meters, s.takeFlash(r.Context())))
+	s.render(w, r, http.StatusOK, views.Dashboard(user, meters, participantSummaries, s.takeFlash(r.Context())))
 }
 
 func (s *Server) meter(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +382,59 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
+func (s *Server) impersonateUser(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		s.render(w, r, http.StatusNotFound, views.NotFound(s.currentUser(r.Context())))
+		return
+	}
+	admin := s.currentUser(r.Context())
+	target, err := s.DB.UserByID(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.render(w, r, http.StatusNotFound, views.NotFound(admin))
+		return
+	}
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if !target.Active {
+		s.putFlash(r.Context(), views.Flash{Kind: "error", Message: "Inaktive Benutzer können nicht übernommen werden."})
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+	if err := s.Sessions.RenewToken(r.Context()); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.Sessions.Put(r.Context(), "impersonator_user_id", admin.ID)
+	s.Sessions.Put(r.Context(), "user_id", target.ID)
+	s.putFlash(r.Context(), views.Flash{Message: "Sie sehen das Portal jetzt als " + target.DisplayName + "."})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) stopImpersonating(w http.ResponseWriter, r *http.Request) {
+	adminID := s.impersonatorUserID(r)
+	if adminID == 0 {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	admin, err := s.DB.UserByID(r.Context(), adminID)
+	if err != nil || !admin.Active || !admin.IsAdmin() {
+		_ = s.Sessions.Destroy(r.Context())
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err := s.Sessions.RenewToken(r.Context()); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.Sessions.Remove(r.Context(), "impersonator_user_id")
+	s.Sessions.Put(r.Context(), "user_id", admin.ID)
+	s.putFlash(r.Context(), views.Flash{Message: "Zurück als " + admin.DisplayName + "."})
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
 func (s *Server) apiImport(w http.ResponseWriter, r *http.Request) {
 	token := auth.ConstantTimeBearer(r.Header.Get("Authorization"))
 	ok, err := s.Auth.CheckAPIToken(r.Context(), token)
@@ -554,11 +618,18 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 		}
 		user, err := s.DB.UserByID(r.Context(), id)
 		if err != nil || !user.Active {
+			if s.restoreImpersonator(w, r) {
+				return
+			}
 			_ = s.Sessions.Destroy(r.Context())
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
+		ctx := context.WithValue(r.Context(), userKey{}, user)
+		if impersonator := s.impersonator(r); impersonator.ID != 0 {
+			ctx = context.WithValue(ctx, impersonatorKey{}, impersonator)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -576,7 +647,7 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 func (s *Server) requirePasswordCurrent(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := s.currentUser(r.Context())
-		if user.PasswordChangeRequired {
+		if user.PasswordChangeRequired && s.currentImpersonator(r.Context()).ID == 0 {
 			http.Redirect(w, r, "/password/change", http.StatusSeeOther)
 			return
 		}
@@ -585,7 +656,15 @@ func (s *Server) requirePasswordCurrent(next http.Handler) http.Handler {
 }
 
 func (s *Server) sessionUserID(r *http.Request) int64 {
-	v := s.Sessions.Get(r.Context(), "user_id")
+	return s.sessionInt64(r, "user_id")
+}
+
+func (s *Server) impersonatorUserID(r *http.Request) int64 {
+	return s.sessionInt64(r, "impersonator_user_id")
+}
+
+func (s *Server) sessionInt64(r *http.Request, key string) int64 {
+	v := s.Sessions.Get(r.Context(), key)
 	switch id := v.(type) {
 	case int64:
 		return id
@@ -597,16 +676,50 @@ func (s *Server) sessionUserID(r *http.Request) int64 {
 }
 
 type userKey struct{}
+type impersonatorKey struct{}
 
 func (s *Server) currentUser(ctx context.Context) db.User {
 	user, _ := ctx.Value(userKey{}).(db.User)
 	return user
 }
 
+func (s *Server) currentImpersonator(ctx context.Context) db.User {
+	user, _ := ctx.Value(impersonatorKey{}).(db.User)
+	return user
+}
+
+func (s *Server) impersonator(r *http.Request) db.User {
+	adminID := s.impersonatorUserID(r)
+	if adminID == 0 {
+		return db.User{}
+	}
+	admin, err := s.DB.UserByID(r.Context(), adminID)
+	if err != nil || !admin.Active || !admin.IsAdmin() {
+		return db.User{}
+	}
+	return admin
+}
+
+func (s *Server) restoreImpersonator(w http.ResponseWriter, r *http.Request) bool {
+	admin := s.impersonator(r)
+	if admin.ID == 0 {
+		return false
+	}
+	s.Sessions.Remove(r.Context(), "impersonator_user_id")
+	s.Sessions.Put(r.Context(), "user_id", admin.ID)
+	s.putFlash(r.Context(), views.Flash{Kind: "error", Message: "Übernahme wurde beendet, weil der Zielbenutzer nicht mehr aktiv ist."})
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	return true
+}
+
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, component templ.Component) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	if err := component.Render(r.Context(), w); err != nil {
+	ctx := r.Context()
+	if impersonator := s.currentImpersonator(ctx); impersonator.ID != 0 {
+		ctx = views.WithImpersonator(ctx, impersonator)
+	}
+	if err := component.Render(ctx, w); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
