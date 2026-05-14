@@ -1,0 +1,7 @@
+.git
+data
+*.db
+*.db-*
+tmp
+.DS_Store
+coverage.out
