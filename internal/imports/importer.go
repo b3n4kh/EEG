@@ -25,15 +25,23 @@ type Importer struct {
 }
 
 type ParsedFile struct {
-	SHA256       string
-	Filename     string
-	ReportStart  *time.Time
-	ReportEnd    *time.Time
-	DataStart    *time.Time
-	DataEnd      *time.Time
-	Meters       map[string]db.MeteringPoint
-	Measurements []db.Measurement
-	Summaries    []db.OverviewSummary
+	SHA256              string
+	Filename            string
+	ReportStart         *time.Time
+	ReportEnd           *time.Time
+	DataStart           *time.Time
+	DataEnd             *time.Time
+	Meters              map[string]db.MeteringPoint
+	Measurements        []db.Measurement
+	Summaries           []db.OverviewSummary
+	ParticipantAccounts []ParticipantAccount
+}
+
+type ParticipantAccount struct {
+	Key              string
+	Username         string
+	DisplayName      string
+	MeteringPointIDs []string
 }
 
 func (i Importer) ImportReader(ctx context.Context, filename string, r io.Reader, uploadedBy *int64) (db.ImportSummary, error) {

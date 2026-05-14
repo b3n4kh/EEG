@@ -2,11 +2,14 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -71,17 +74,25 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/admin/eda-imports", s.apiEDAImport)
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireLogin)
+		r.Get("/password/change", s.passwordChangeForm)
+		r.Post("/password/change", s.passwordChange)
+	})
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireLogin)
+		r.Use(s.requirePasswordCurrent)
 		r.Get("/", s.dashboard)
 		r.Get("/meters/{id}", s.meter)
 	})
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireLogin)
+		r.Use(s.requirePasswordCurrent)
 		r.Use(s.requireAdmin)
 		r.Get("/admin", s.admin)
 		r.Get("/admin/users/new", s.newUserForm)
 		r.Post("/admin/users", s.createUser)
 		r.Get("/admin/users/{id}", s.editUserForm)
 		r.Post("/admin/users/{id}", s.updateUser)
+		r.Post("/admin/imports", s.adminImport)
 		r.Post("/admin/eda-imports", s.adminEDAImport)
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +124,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Sessions.Put(r.Context(), "user_id", user.ID)
+	if user.PasswordChangeRequired {
+		http.Redirect(w, r, "/password/change", http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -165,6 +180,43 @@ func (s *Server) meter(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, http.StatusOK, views.Meter(user, meter, metrics, selected, charts.LineSVG(points, label), points))
+}
+
+func (s *Server) passwordChangeForm(w http.ResponseWriter, r *http.Request) {
+	s.render(w, r, http.StatusOK, views.PasswordChange(s.currentUser(r.Context()), ""))
+}
+
+func (s *Server) passwordChange(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	user := s.currentUser(r.Context())
+	current := r.FormValue("current_password")
+	password := r.FormValue("password")
+	confirm := r.FormValue("password_confirm")
+	switch {
+	case !auth.CheckPassword(user.PasswordHash, current):
+		s.render(w, r, http.StatusUnauthorized, views.PasswordChange(user, "Das aktuelle Passwort ist falsch."))
+		return
+	case len(password) < 10:
+		s.render(w, r, http.StatusBadRequest, views.PasswordChange(user, "Das neue Passwort muss mindestens 10 Zeichen lang sein."))
+		return
+	case password != confirm:
+		s.render(w, r, http.StatusBadRequest, views.PasswordChange(user, "Die neuen Passwörter stimmen nicht überein."))
+		return
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	if err := s.DB.UpdatePassword(r.Context(), user.ID, hash, false); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.putFlash(r.Context(), views.Flash{Message: "Passwort wurde geändert."})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
@@ -306,7 +358,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 			s.serverError(w, r, err)
 			return
 		}
-		if err := s.DB.UpdatePassword(r.Context(), id, hash); err != nil {
+		if err := s.DB.UpdatePassword(r.Context(), id, hash, form.User.Role == db.RoleParticipant); err != nil {
 			s.serverError(w, r, err)
 			return
 		}
@@ -346,6 +398,31 @@ func (s *Server) apiImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) adminImport(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		s.putFlash(r.Context(), views.Flash{Kind: "error", Message: "Ungültiger XLSX Upload."})
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		s.putFlash(r.Context(), views.Flash{Kind: "error", Message: "Bitte eine XLSX Datei auswählen."})
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+	defer file.Close()
+	user := s.currentUser(r.Context())
+	summary, err := s.Importer.ImportReader(r.Context(), header.Filename, file, &user.ID)
+	if err != nil {
+		s.putFlash(r.Context(), views.Flash{Kind: "error", Message: "XLSX Import fehlgeschlagen: " + err.Error()})
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+	s.putFlash(r.Context(), views.Flash{Message: fmt.Sprintf("XLSX Import abgeschlossen: %d gelesen, %d neu, %d aktualisiert, %d unverändert.",
+		summary.MeasurementsRead, summary.MeasurementsInserted, summary.MeasurementsUpdated, summary.MeasurementsSkipped)})
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
 func (s *Server) apiEDAImport(w http.ResponseWriter, r *http.Request) {
@@ -397,13 +474,75 @@ func (s *Server) adminEDAImport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) importEDA(ctx context.Context, from, to time.Time, uploadedBy *int64) (db.ImportSummary, error) {
 	if !s.EDA.Config.Enabled() {
+		slog.Error("EDA import requested but not configured")
 		return db.ImportSummary{}, fmt.Errorf("EDA import is not configured")
 	}
+	slog.Info("running EDA import", "from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339), "uploaded_by_user_id", uploadedBy)
 	parsed, err := s.EDA.Fetch(ctx, from, to)
 	if err != nil {
+		slog.Error("EDA import fetch failed", "from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339), "error", err)
 		return db.ImportSummary{}, err
 	}
-	return s.Importer.ImportParsed(ctx, parsed, uploadedBy)
+	summary, err := s.Importer.ImportParsed(ctx, parsed, uploadedBy)
+	if err != nil {
+		slog.Error("EDA import store failed", "filename", parsed.Filename, "measurements", len(parsed.Measurements), "summaries", len(parsed.Summaries), "error", err)
+		return db.ImportSummary{}, err
+	}
+	if err := s.syncEDAParticipants(ctx, parsed.ParticipantAccounts); err != nil {
+		slog.Error("EDA participant sync failed", "filename", parsed.Filename, "participant_accounts", len(parsed.ParticipantAccounts), "error", err)
+		return db.ImportSummary{}, err
+	}
+	slog.Info("EDA import stored",
+		"filename", summary.Filename,
+		"measurements_read", summary.MeasurementsRead,
+		"measurements_inserted", summary.MeasurementsInserted,
+		"measurements_updated", summary.MeasurementsUpdated,
+		"measurements_skipped", summary.MeasurementsSkipped,
+		"summaries_read", summary.SummariesRead,
+		"summaries_inserted", summary.SummariesInserted,
+		"summaries_updated", summary.SummariesUpdated,
+	)
+	return summary, nil
+}
+
+func (s *Server) syncEDAParticipants(ctx context.Context, accounts []imports.ParticipantAccount) error {
+	if len(accounts) == 0 {
+		slog.Info("EDA participant sync skipped; no participant accounts in community response")
+		return nil
+	}
+	for _, account := range accounts {
+		password, err := randomPassword()
+		if err != nil {
+			return err
+		}
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			return err
+		}
+		user, created, err := s.DB.UpsertEDAUser(ctx, account.Key, account.Username, account.DisplayName, hash)
+		if err != nil {
+			return fmt.Errorf("sync EDA participant %s: %w", account.DisplayName, err)
+		}
+		if err := s.DB.AssignMeters(ctx, user.ID, account.MeteringPointIDs); err != nil {
+			return fmt.Errorf("assign EDA participant meters %s: %w", account.DisplayName, err)
+		}
+		slog.Info("synced EDA participant account",
+			"user_id", user.ID,
+			"username", user.Username,
+			"display_name", user.DisplayName,
+			"created", created,
+			"metering_points", len(account.MeteringPointIDs),
+		)
+	}
+	return nil
+}
+
+func randomPassword() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
 func (s *Server) requireLogin(next http.Handler) http.Handler {
@@ -428,6 +567,17 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 		user := s.currentUser(r.Context())
 		if !user.IsAdmin() {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requirePasswordCurrent(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := s.currentUser(r.Context())
+		if user.PasswordChangeRequired {
+			http.Redirect(w, r, "/password/change", http.StatusSeeOther)
 			return
 		}
 		next.ServeHTTP(w, r)

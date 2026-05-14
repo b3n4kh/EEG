@@ -8,12 +8,14 @@ const (
 )
 
 type User struct {
-	ID           int64
-	Username     string
-	DisplayName  string
-	Role         string
-	Active       bool
-	PasswordHash string
+	ID                     int64
+	Username               string
+	DisplayName            string
+	Role                   string
+	Active                 bool
+	PasswordHash           string
+	EDAParticipantKey      string
+	PasswordChangeRequired bool
 }
 
 func (u User) IsAdmin() bool {

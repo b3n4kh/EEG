@@ -9,6 +9,7 @@ Modernes SSR-Portal fuer Energiegemeinschaften: XLSX-Reports importieren, Messwe
 - Speichert Viertelstundenwerte idempotent in SQLite
 - Verhindert Duplikate bei mehrfachen oder ueberlappenden Uploads
 - Bietet Login fuer Teilnehmer und Administratoren
+- Erlaubt XLSX Uploads direkt im Adminbereich
 - Erlaubt Admins, Zaehlpunkte Benutzerkonten zuzuordnen
 - Rendert Seiten klassisch serverseitig: kein SPA, kein clientseitiger Router
 - Zeichnet Zeitreihen als serverseitige Inline-SVG-Charts
@@ -46,6 +47,8 @@ curl -H "Authorization: Bearer dev-token" \
   -F "file=@./imports/report.xlsx" \
   http://localhost:8080/api/admin/imports
 ```
+
+XLSX Upload ist fuer eingeloggte Admins auch direkt unter <http://localhost:8080/admin> moeglich.
 
 EDA Import per API:
 
@@ -153,17 +156,18 @@ curl -fsS http://localhost:8080/healthz
 | `ADDR` | `:8080` | HTTP Listen-Adresse im Container oder lokal |
 | `DATABASE_PATH` | `./data/eeg.db` lokal, `/data/eeg.db` im Container | SQLite-Datenbank |
 | `APP_ENV` | `dev` lokal, `production` im Container | Steuert sichere Defaults |
+| `LOG_LEVEL` | `debug` in dev, sonst `info` | Log-Level: `debug`, `info`, `warn`, `error` |
 | `SESSION_SECRET` | leer | In Production erforderlich |
 | `ADMIN_USERNAME` | leer | Erstellt oder aktualisiert Admin beim Start |
 | `ADMIN_PASSWORD` | leer | Passwort fuer Bootstrap-Admin |
 | `ADMIN_API_TOKEN` | leer | Bearer Token fuer XLSX Uploads |
-| `EDA_BASE_URL` | `https://prod-api.eda-portal.at/api` | EDA API Basis-URL |
+| `EDA_BASE_URL` | `https://prod-api.eda-portal.at/api` | EDA API Basis-URL fuer Login und Energy-Community Details |
+| `EDA_PORTAL_BASE_URL` | `https://prod.eda-portal.at/api` | EDA Portal API Basis-URL fuer `consumptionsurya` Messreihen |
 | `EDA_USERNAME` | leer | EDA Portal Login |
 | `EDA_PASSWORD` | leer | EDA Portal Passwort |
 | `EDA_COMMUNITY_ID` | leer | Interne EDA Energy-Community-ID |
-| `EDA_METERING_POINT_ID` | `EDA_<EDA_COMMUNITY_ID>` | Lokale synthetische Zaehlpunkt-ID fuer EDA Aggregatsdaten |
-| `EDA_METERING_POINT_NAME` | `EDA Community <EDA_COMMUNITY_ID>` | Anzeigename fuer den synthetischen EDA Zaehlpunkt |
-| `EDA_GROUP_BY` | `day` | Aktuell fuer Import nur `day` unterstuetzt |
+| `EDA_METERING_POINTS` | leer | Optionaler Fallback, falls die Community-Detail-API keine Zaehlpunkte liefert: `ZP_ID:CONSUMPTION,ZP_ID:GENERATION` |
+| `EDA_GROUP_BY` | `day` | EDA Import unterstuetzt nur Tageswerte; Wert muss `day` sein |
 
 ## API
 
@@ -199,7 +203,9 @@ curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
   http://localhost:8080/api/admin/eda-imports
 ```
 
-Der EDA Import speichert die aggregierten Community-Zeitreihen unter einem synthetischen Zaehlpunkt. Standardmaessig ist das `EDA_<EDA_COMMUNITY_ID>`. Die EDA-Zeitstempel werden als `Europe/Vienna` interpretiert und UTC gespeichert.
+Der EDA Import liest die Zaehlpunkte aus der Energy-Community Detail-API und importiert pro Zaehlpunkt die taeglichen `consumptionsurya/g` und `consumptionsurya/p` Messreihen. Daraus werden die gleichen Messgroessen wie im XLSX Import abgeleitet, inklusive synthetischer `TOTAL`-Reihen. Die EDA-Zeitstempel werden als `Europe/Vienna` interpretiert und UTC gespeichert.
+
+Zaehlpunkte muessen 33 Zeichen lang sein, mit `AT00` beginnen und duerfen keine eingebetteten Community-Codes wie `RC107893` enthalten. Im lokalen Dev-Modus loggt der EDA Import die Zaehlpunkt-Erkennung und uebersprungene Kandidaten mit `LOG_LEVEL=debug`.
 
 ## Datenmodell in Kurzform
 

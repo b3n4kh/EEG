@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"github.com/ben/eeg-sumsum/internal/auth"
 	"github.com/ben/eeg-sumsum/internal/db"
 	"github.com/ben/eeg-sumsum/internal/eda"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestParticipantCannotAccessAdmin(t *testing.T) {
@@ -78,6 +81,49 @@ func TestUploadAPIRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestAdminCanUploadXLSXFromUI(t *testing.T) {
+	database := testDB(t)
+	hash, err := auth.HashPassword("secret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateUser(context.Background(), "admin", "Admin", hash, db.RoleAdmin, true); err != nil {
+		t.Fatal(err)
+	}
+	app := New(database, true)
+	client, baseURL := testClient(app.Routes())
+	login(t, client, baseURL, "admin", "secret123")
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "report.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(testWorkbook(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.Post(baseURL+"/admin/imports", writer.FormDataContentType(), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	metrics, err := database.MetricLabels(context.Background(), "AT001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("metrics = %d, want 1", len(metrics))
+	}
+}
+
 func TestEDAImportAPIImportsIdempotently(t *testing.T) {
 	database := testDB(t)
 	if err := (auth.Service{DB: database}).BootstrapAPIToken(context.Background(), "dev-token"); err != nil {
@@ -86,29 +132,145 @@ func TestEDAImportAPIImportsIdempotently(t *testing.T) {
 	edaServer := fakeEDAServer(t)
 	defer edaServer.Close()
 	app := New(database, true, eda.Config{
-		BaseURL:           edaServer.URL,
-		Username:          "user@example.com",
-		Password:          "secret",
-		CommunityID:       "community-1",
-		MeteringPointID:   "EDA_TEST",
-		MeteringPointName: "EDA Test",
+		BaseURL:       edaServer.URL,
+		PortalBaseURL: edaServer.URL,
+		Username:      "user@example.com",
+		Password:      "secret",
+		CommunityID:   "community-1",
 	})
 
 	first := postEDAImport(t, app.Routes())
-	if first.MeasurementsInserted != 2 || first.MeasurementsUpdated != 0 || first.MeasurementsSkipped != 0 {
-		t.Fatalf("first summary = %+v, want 2 inserted", first)
+	if first.MeasurementsInserted != 13 || first.MeasurementsUpdated != 0 || first.MeasurementsSkipped != 0 {
+		t.Fatalf("first summary = %+v, want 13 inserted", first)
 	}
 	second := postEDAImport(t, app.Routes())
-	if second.MeasurementsInserted != 0 || second.MeasurementsUpdated != 0 || second.MeasurementsSkipped != 2 {
-		t.Fatalf("second summary = %+v, want 2 skipped", second)
+	if second.MeasurementsInserted != 0 || second.MeasurementsUpdated != 0 || second.MeasurementsSkipped != 13 {
+		t.Fatalf("second summary = %+v, want 13 skipped", second)
 	}
-	metrics, err := database.MetricLabels(context.Background(), "EDA_TEST")
+	metrics, err := database.MetricLabels(context.Background(), "AT0010000000000000001000000000001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(metrics) != 2 {
-		t.Fatalf("metrics = %d, want 2", len(metrics))
+	if len(metrics) != 5 {
+		t.Fatalf("metrics = %d, want 5", len(metrics))
 	}
+	users, err := database.Users(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 1 {
+		t.Fatalf("users = %d, want 1 imported participant", len(users))
+	}
+	if users[0].Username != "petra.akhras" || !users[0].PasswordChangeRequired {
+		t.Fatalf("imported user = %+v, want petra.akhras with required password change", users[0])
+	}
+	assigned, err := database.AssignedMeterIDs(context.Background(), users[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assigned) != 2 {
+		t.Fatalf("assigned meters = %d, want 2", len(assigned))
+	}
+}
+
+func TestParticipantMustChangeInitialPassword(t *testing.T) {
+	database := testDB(t)
+	hash, err := auth.HashPassword("secret12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateUser(context.Background(), "teilnehmer", "Teilnehmer", hash, db.RoleParticipant, true); err != nil {
+		t.Fatal(err)
+	}
+	user, err := database.UserByUsername(context.Background(), "teilnehmer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdatePassword(context.Background(), user.ID, hash, true); err != nil {
+		t.Fatal(err)
+	}
+	app := New(database, true)
+	client, baseURL := testClient(app.Routes())
+	login(t, client, baseURL, "teilnehmer", "secret12345")
+
+	resp, err := client.Get(baseURL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Passwort ändern") {
+		t.Fatalf("GET / body does not contain password change form: %s", string(body))
+	}
+
+	form := url.Values{
+		"current_password": {"secret12345"},
+		"password":         {"newsecret12345"},
+		"password_confirm": {"newsecret12345"},
+	}
+	resp, err = client.Post(baseURL+"/password/change", "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Dashboard") {
+		t.Fatalf("password change final body does not contain dashboard: %s", string(body))
+	}
+	updated, err := database.UserByUsername(context.Background(), "teilnehmer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PasswordChangeRequired {
+		t.Fatal("password change flag is still set")
+	}
+}
+
+func testWorkbook(t *testing.T) []byte {
+	t.Helper()
+	f := excelize.NewFile()
+	defer f.Close()
+	_, _ = f.NewSheet("Energiedaten")
+	_, _ = f.NewSheet("Übersicht")
+	_ = f.DeleteSheet("Sheet1")
+
+	values := map[string]any{
+		"Energiedaten!B2":  "AT001",
+		"Energiedaten!B4":  "GENERATION",
+		"Energiedaten!B5":  "01.05.2026 00:00",
+		"Energiedaten!B6":  "01.05.2026 23:45",
+		"Energiedaten!B7":  "01.05.2026 00:00",
+		"Energiedaten!B8":  "01.05.2026 23:45",
+		"Energiedaten!B14": "Wirkenergie [KWH]",
+		"Energiedaten!A17": "01.05.2026 00:00",
+		"Energiedaten!B17": "1,25",
+		"Energiedaten!C17": "L1",
+		"Übersicht!F6":     "Wirkenergie [KWH]",
+		"Übersicht!A7":     "AT001",
+		"Übersicht!B7":     "GENERATION",
+		"Übersicht!C7":     "Operator",
+		"Übersicht!D7":     "01.05.2026 00:00",
+		"Übersicht!E7":     "01.05.2026 23:45",
+		"Übersicht!F7":     "1,25",
+		"Übersicht!O7":     "OK",
+		"Übersicht!P7":     "L1",
+	}
+	for cell, value := range values {
+		if err := f.SetCellValue(strings.Split(cell, "!")[0], strings.Split(cell, "!")[1], value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func testDB(t *testing.T) *db.DB {
@@ -128,40 +290,76 @@ func fakeEDAServer(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/v4/auth/login":
 			_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-token"})
-		case "/pwa/energycommunities/community-1/kpiData":
+		case "/pwa/energycommunities/community-1":
 			if r.Header.Get("Authorization") != "Bearer test-token" {
 				t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"success": true,
 				"data": map[string]any{
-					"autarky":          27.8,
-					"ownConsumption":   34.5,
-					"community":        107.4,
-					"feed":             203.5,
-					"remainingDemand":  279.0,
-					"communityGrouped": []map[string]any{{"enixiGenerationType": "Photovoltaik", "sum": 107.4}},
+					"meteringPoints": []map[string]any{
+						{"meteringPointId": "AT0010000000000000001000000000001", "energyDirection": "CONSUMPTION", "participant": fakeParticipant("p-1")},
+						{"meteringPointId": "AT0010000000000000001000000000002", "energyDirection": "GENERATION", "participant": fakeParticipant("p-2")},
+					},
 				},
 			})
-		case "/pwa/energycommunities/community-1/meterdata":
+		case "/consumptionsurya/g/AT0010000000000000001000000000001":
 			if r.Header.Get("Authorization") != "Bearer test-token" {
 				t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"success": true,
 				"s":       true,
-				"data": map[string]any{
-					"substitutesOrMissingData": false,
-					"sumGeneration":            12.5,
-					"sumFeed":                  7.0,
-					"generationSeries":         []map[string]any{{"date": "2026-05-06T00:00:00", "value": 12.5, "methods": "L1"}},
-					"feedSeries":               []map[string]any{{"date": "2026-05-06T00:00:00", "value": 7.0, "methods": nil}},
-				},
+				"data":    [][]any{{"2026-05-06T00:00:00", 10.0}},
+				"meta":    map[string]any{"scale_x": "day"},
+			})
+		case "/consumptionsurya/p/AT0010000000000000001000000000001":
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"s":       true,
+				"data":    [][]any{{"2026-05-06T00:00:00", 4.0}},
+				"meta":    map[string]any{"scale_x": "day"},
+			})
+		case "/consumptionsurya/g/AT0010000000000000001000000000002":
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"s":       true,
+				"data":    [][]any{{"2026-05-06T00:00:00", 20.0}},
+				"meta":    map[string]any{"scale_x": "day"},
+			})
+		case "/consumptionsurya/p/AT0010000000000000001000000000002":
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				t.Fatalf("Authorization = %q", r.Header.Get("Authorization"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"s":       true,
+				"data":    [][]any{{"2026-05-06T00:00:00", 7.0}},
+				"meta":    map[string]any{"scale_x": "day"},
 			})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
+}
+
+func fakeParticipant(id string) map[string]any {
+	return map[string]any{
+		"id":        id,
+		"firstName": "Petra",
+		"lastName":  "Akhras",
+		"address": map[string]any{
+			"street":        "Summergasse",
+			"street_number": "3",
+			"zip":           "3400",
+			"city":          "Kierling",
+		},
+	}
 }
 
 func postEDAImport(t *testing.T, handler http.Handler) db.ImportSummary {

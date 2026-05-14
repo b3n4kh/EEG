@@ -27,6 +27,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel(cfg.DevMode)})))
 	database, err := db.Open(cfg.DatabasePath)
 	if err != nil {
 		return err
@@ -66,4 +67,21 @@ func run() error {
 		defer cancel()
 		return httpServer.Shutdown(ctx)
 	}
+}
+
+func logLevel(devMode bool) slog.Level {
+	switch os.Getenv("LOG_LEVEL") {
+	case "debug", "DEBUG":
+		return slog.LevelDebug
+	case "warn", "WARN":
+		return slog.LevelWarn
+	case "error", "ERROR":
+		return slog.LevelError
+	case "info", "INFO":
+		return slog.LevelInfo
+	}
+	if devMode {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
 }

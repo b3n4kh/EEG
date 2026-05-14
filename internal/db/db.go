@@ -41,6 +41,15 @@ func (db *DB) init(ctx context.Context) error {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("apply schema: %w", err)
 	}
+	if err := db.ensureColumn(ctx, "users", "password_change_required", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.ensureColumn(ctx, "users", "eda_participant_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_eda_participant_key ON users (eda_participant_key) WHERE eda_participant_key <> ''`); err != nil {
+		return fmt.Errorf("create users EDA participant index: %w", err)
+	}
 	return nil
 }
 
@@ -52,6 +61,8 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('admin', 'participant')),
   active INTEGER NOT NULL DEFAULT 1,
+  password_change_required INTEGER NOT NULL DEFAULT 0,
+  eda_participant_key TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -127,7 +138,36 @@ CREATE TABLE IF NOT EXISTS overview_summaries (
 CREATE INDEX IF NOT EXISTS idx_measurements_meter_time ON measurements (metering_point_id, interval_start);
 CREATE INDEX IF NOT EXISTS idx_measurements_metric ON measurements (metric_key);
 CREATE INDEX IF NOT EXISTS idx_summaries_meter ON overview_summaries (metering_point_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_eda_participant_key ON users (eda_participant_key) WHERE eda_participant_key <> '';
 `
+
+func (db *DB) ensureColumn(ctx context.Context, table, column, definition string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
+}
 
 func (db *DB) UpsertUser(ctx context.Context, username, displayName, passwordHash, role string, active bool) (int64, error) {
 	if displayName == "" {
@@ -171,21 +211,72 @@ func (db *DB) UpdateUser(ctx context.Context, id int64, displayName, role string
 	return err
 }
 
-func (db *DB) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
-	_, err := db.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, passwordHash, id)
+func (db *DB) UpdatePassword(ctx context.Context, id int64, passwordHash string, requireChange bool) error {
+	_, err := db.ExecContext(ctx, `UPDATE users SET password_hash = ?, password_change_required = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, passwordHash, boolInt(requireChange), id)
 	return err
 }
 
+func (db *DB) UpsertEDAUser(ctx context.Context, participantKey, usernameBase, displayName, passwordHash string) (User, bool, error) {
+	participantKey = strings.TrimSpace(participantKey)
+	usernameBase = strings.Trim(strings.TrimSpace(usernameBase), "-.")
+	displayName = strings.TrimSpace(displayName)
+	if participantKey == "" {
+		return User{}, false, errors.New("EDA participant key is required")
+	}
+	if usernameBase == "" {
+		usernameBase = "teilnehmer"
+	}
+	if displayName == "" {
+		displayName = usernameBase
+	}
+	existing, err := db.userByEDAParticipantKey(ctx, participantKey)
+	if err == nil {
+		if _, err := db.ExecContext(ctx, `
+UPDATE users SET display_name = ?, role = ?, active = 1, updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`, displayName, RoleParticipant, existing.ID); err != nil {
+			return User{}, false, err
+		}
+		user, err := db.UserByID(ctx, existing.ID)
+		return user, false, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return User{}, false, err
+	}
+	for i := 1; i < 1000; i++ {
+		username := usernameBase
+		if i > 1 {
+			username = fmt.Sprintf("%s-%d", usernameBase, i)
+		}
+		if _, err := db.UserByUsername(ctx, username); err == nil {
+			continue
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return User{}, false, err
+		}
+		_, err := db.ExecContext(ctx, `
+INSERT INTO users (username, display_name, password_hash, role, active, password_change_required, eda_participant_key)
+VALUES (?, ?, ?, ?, 1, 1, ?)`, username, displayName, passwordHash, RoleParticipant, participantKey)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				continue
+			}
+			return User{}, false, err
+		}
+		user, err := db.UserByUsername(ctx, username)
+		return user, true, err
+	}
+	return User{}, false, fmt.Errorf("could not allocate username for EDA participant %s", participantKey)
+}
+
 func (db *DB) UserByUsername(ctx context.Context, username string) (User, error) {
-	return scanUser(db.QueryRowContext(ctx, `SELECT id, username, display_name, password_hash, role, active FROM users WHERE username = ?`, username))
+	return scanUser(db.QueryRowContext(ctx, userSelectSQL+` WHERE username = ?`, username))
 }
 
 func (db *DB) UserByID(ctx context.Context, id int64) (User, error) {
-	return scanUser(db.QueryRowContext(ctx, `SELECT id, username, display_name, password_hash, role, active FROM users WHERE id = ?`, id))
+	return scanUser(db.QueryRowContext(ctx, userSelectSQL+` WHERE id = ?`, id))
 }
 
 func (db *DB) Users(ctx context.Context) ([]User, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, username, display_name, password_hash, role, active FROM users ORDER BY role, username`)
+	rows, err := db.QueryContext(ctx, userSelectSQL+` ORDER BY role, username`)
 	if err != nil {
 		return nil, err
 	}
@@ -201,17 +292,24 @@ func (db *DB) Users(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
+const userSelectSQL = `SELECT id, username, display_name, password_hash, role, active, eda_participant_key, password_change_required FROM users`
+
+func (db *DB) userByEDAParticipantKey(ctx context.Context, participantKey string) (User, error) {
+	return scanUser(db.QueryRowContext(ctx, userSelectSQL+` WHERE eda_participant_key = ?`, participantKey))
+}
+
 type userScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanUser(s userScanner) (User, error) {
 	var u User
-	var active int
-	if err := s.Scan(&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.Role, &active); err != nil {
+	var active, passwordChangeRequired int
+	if err := s.Scan(&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &u.Role, &active, &u.EDAParticipantKey, &passwordChangeRequired); err != nil {
 		return User{}, err
 	}
 	u.Active = active == 1
+	u.PasswordChangeRequired = passwordChangeRequired == 1
 	return u, nil
 }
 

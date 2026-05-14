@@ -39,6 +39,23 @@ func Login(errorMessage string) templ.Component {
 	})
 }
 
+func PasswordChange(user db.User, errorMessage string) templ.Component {
+	return page("Passwort ändern", user, func(b *strings.Builder) {
+		if errorMessage != "" {
+			flash(b, Flash{Kind: "error", Message: errorMessage})
+		}
+		b.WriteString(`<section class="auth-panel"><h1>Passwort ändern</h1>`)
+		if user.PasswordChangeRequired {
+			b.WriteString(`<p>Bitte ein neues Passwort setzen, bevor das Portal weiter genutzt wird.</p>`)
+		}
+		b.WriteString(`<form method="post" action="/password/change" class="stack">`)
+		b.WriteString(`<label>Aktuelles Passwort<input name="current_password" type="password" autocomplete="current-password" required></label>`)
+		b.WriteString(`<label>Neues Passwort<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>`)
+		b.WriteString(`<label>Neues Passwort wiederholen<input name="password_confirm" type="password" autocomplete="new-password" minlength="10" required></label>`)
+		b.WriteString(`<button type="submit">Passwort speichern</button></form></section>`)
+	})
+}
+
 func Dashboard(user db.User, meters []db.MeterOverview, flashMsg Flash) templ.Component {
 	return page("Dashboard", user, func(b *strings.Builder) {
 		flash(b, flashMsg)
@@ -70,7 +87,7 @@ func Meter(user db.User, meter db.MeterOverview, metrics []db.MetricTotal, selec
 			start = 0
 		}
 		for i := len(points) - 1; i >= start; i-- {
-			fmt.Fprintf(b, `<tr><td>%s</td><td class="num">%.6f kWh</td></tr>`, esc(points[i].IntervalStart.Local().Format("02.01.2006 15:04")), points[i].Value)
+			fmt.Fprintf(b, `<tr><td>%s</td><td class="num">%.3f kWh</td></tr>`, esc(points[i].IntervalStart.Local().Format("02.01.2006")), points[i].Value)
 		}
 		b.WriteString(`</tbody></table></section>`)
 	})
@@ -88,10 +105,17 @@ func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Fl
 			if !u.Active {
 				status = "inaktiv"
 			}
+			if u.PasswordChangeRequired {
+				status += ", Passwortwechsel"
+			}
 			fmt.Fprintf(b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><a href="/admin/users/%d">Bearbeiten</a></td></tr>`, esc(u.DisplayName), esc(u.Username), esc(u.Role), status, u.ID)
 		}
 		b.WriteString(`</tbody></table></section>`)
-		b.WriteString(`<section><h2>XLSX Upload</h2><p>API: <code>POST /api/admin/imports</code> mit <code>Authorization: Bearer &lt;token&gt;</code> und Multipart-Feld <code>file</code>.</p></section>`)
+		b.WriteString(`<section><h2>XLSX Upload</h2>`)
+		b.WriteString(`<form method="post" action="/admin/imports" enctype="multipart/form-data" class="filter">`)
+		b.WriteString(`<label>Datei<input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></label>`)
+		b.WriteString(`<button type="submit">XLSX importieren</button></form>`)
+		b.WriteString(`<p>API: <code>POST /api/admin/imports</code> mit <code>Authorization: Bearer &lt;token&gt;</code> und Multipart-Feld <code>file</code>.</p></section>`)
 		b.WriteString(`<section><h2>EDA Import</h2>`)
 		if edaEnabled {
 			today := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
