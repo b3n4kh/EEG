@@ -102,6 +102,16 @@ CREATE TABLE IF NOT EXISTS import_batches (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS scheduled_import_status (
+  name TEXT PRIMARY KEY,
+  last_started_at TEXT,
+  last_finished_at TEXT,
+  last_success INTEGER,
+  last_result TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS measurements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   metering_point_id TEXT NOT NULL REFERENCES metering_points(id) ON DELETE CASCADE,
@@ -380,6 +390,67 @@ ON CONFLICT(sha256) DO UPDATE SET
 		return 0, err
 	}
 	return id, nil
+}
+
+func (db *DB) RecordScheduledImportStarted(ctx context.Context, name string, started time.Time) error {
+	_, err := db.ExecContext(ctx, `
+INSERT INTO scheduled_import_status (name, last_started_at, last_finished_at, last_success, last_result, last_error, updated_at)
+VALUES (?, ?, NULL, NULL, ?, '', CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET
+  last_started_at = excluded.last_started_at,
+  last_finished_at = NULL,
+  last_success = NULL,
+  last_result = excluded.last_result,
+  last_error = '',
+  updated_at = CURRENT_TIMESTAMP
+`, name, started.UTC().Format(time.RFC3339), "running")
+	return err
+}
+
+func (db *DB) RecordScheduledImportFinished(ctx context.Context, name string, started, finished time.Time, success bool, result, errorMessage string) error {
+	_, err := db.ExecContext(ctx, `
+INSERT INTO scheduled_import_status (name, last_started_at, last_finished_at, last_success, last_result, last_error, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET
+  last_started_at = excluded.last_started_at,
+  last_finished_at = excluded.last_finished_at,
+  last_success = excluded.last_success,
+  last_result = excluded.last_result,
+  last_error = excluded.last_error,
+  updated_at = CURRENT_TIMESTAMP
+`, name, started.UTC().Format(time.RFC3339), finished.UTC().Format(time.RFC3339), boolInt(success), result, errorMessage)
+	return err
+}
+
+func (db *DB) ScheduledImportStatus(ctx context.Context, name string) (ScheduledImportStatus, error) {
+	row := db.QueryRowContext(ctx, `
+SELECT name, last_started_at, last_finished_at, last_success, last_result, last_error
+FROM scheduled_import_status
+WHERE name = ?`, name)
+	var status ScheduledImportStatus
+	var started, finished sql.NullString
+	var success sql.NullInt64
+	if err := row.Scan(&status.Name, &started, &finished, &success, &status.LastResult, &status.LastError); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ScheduledImportStatus{Name: name}, nil
+		}
+		return ScheduledImportStatus{}, err
+	}
+	if started.Valid {
+		if t, err := time.Parse(time.RFC3339, started.String); err == nil {
+			status.LastStartedAt = &t
+		}
+	}
+	if finished.Valid {
+		if t, err := time.Parse(time.RFC3339, finished.String); err == nil {
+			status.LastFinishedAt = &t
+		}
+	}
+	if success.Valid {
+		v := success.Int64 == 1
+		status.LastSuccess = &v
+	}
+	return status, nil
 }
 
 func (db *DB) UpsertMeasurement(ctx context.Context, tx *sql.Tx, m Measurement, batchID int64) (string, error) {

@@ -17,6 +17,8 @@ func TestLoadUsesDevelopmentDefaultsAndGeneratesSessionSecret(t *testing.T) {
 	require.True(t, cfg.DevMode)
 	require.NotEmpty(t, cfg.SessionSecret)
 	require.Equal(t, eda.DefaultBaseURL, cfg.EDA.BaseURL)
+	require.True(t, cfg.EDAAutoImport.Enabled)
+	require.Equal(t, "15 3 * * *", cfg.EDAAutoImport.Schedule)
 }
 
 func TestLoadRequiresSessionSecretOutsideDev(t *testing.T) {
@@ -40,6 +42,8 @@ func TestLoadReadsOverrides(t *testing.T) {
 	t.Setenv("EDA_PASSWORD", "eda-pass")
 	t.Setenv("EDA_COMMUNITY_ID", "community")
 	t.Setenv("EDA_METERING_POINTS", "AT001:CONSUMPTION")
+	t.Setenv("EDA_AUTO_IMPORT_ENABLED", "false")
+	t.Setenv("EDA_AUTO_IMPORT_CRON", "45 2 * * *")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -55,6 +59,8 @@ func TestLoadReadsOverrides(t *testing.T) {
 	require.Equal(t, "eda-pass", cfg.EDA.Password)
 	require.Equal(t, "community", cfg.EDA.CommunityID)
 	require.Equal(t, "AT001:CONSUMPTION", cfg.EDA.MeteringPoints)
+	require.False(t, cfg.EDAAutoImport.Enabled)
+	require.Equal(t, "45 2 * * *", cfg.EDAAutoImport.Schedule)
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -72,6 +78,8 @@ func clearConfigEnv(t *testing.T) {
 		"EDA_PASSWORD",
 		"EDA_COMMUNITY_ID",
 		"EDA_METERING_POINTS",
+		"EDA_AUTO_IMPORT_ENABLED",
+		"EDA_AUTO_IMPORT_CRON",
 	} {
 		t.Setenv(key, "")
 	}

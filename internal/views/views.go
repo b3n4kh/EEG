@@ -27,6 +27,18 @@ type UserForm struct {
 	PasswordOn bool
 }
 
+type EDAAutoImportStatus struct {
+	Enabled        bool
+	Schedule       string
+	LookbackDays   int
+	LastStartedAt  *time.Time
+	LastFinishedAt *time.Time
+	LastSuccess    *bool
+	LastResult     string
+	LastError      string
+	NextRun        *time.Time
+}
+
 type impersonatorKey struct{}
 
 func WithImpersonator(ctx context.Context, user db.User) context.Context {
@@ -141,7 +153,7 @@ func Meter(user db.User, meter db.MeterOverview, metrics []db.MetricTotal, selec
 	})
 }
 
-func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Flash, edaEnabled bool) templ.Component {
+func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Flash, edaEnabled bool, autoImport EDAAutoImportStatus) templ.Component {
 	return page("Administration", user, func(b *strings.Builder) {
 		flash(b, flashMsg)
 		b.WriteString(`<div class="toolbar"><div><h1>Administration</h1><p>Alle Zählpunkte, Benutzer und Upload-Schnittstelle.</p></div><a class="button" href="/admin/users/new">Benutzer anlegen</a></div>`)
@@ -170,6 +182,7 @@ func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Fl
 		b.WriteString(`<p>API: <code>POST /api/admin/imports</code> mit <code>Authorization: Bearer &lt;token&gt;</code> und Multipart-Feld <code>file</code>.</p></section>`)
 		b.WriteString(`<section><h2>EDA Import</h2>`)
 		if edaEnabled {
+			edaAutoImportStatus(b, autoImport)
 			today := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 			b.WriteString(`<form method="post" action="/admin/eda-imports" class="filter">`)
 			fmt.Fprintf(b, `<label>Von<input type="date" name="from" value="%s" required></label>`, esc(today))
@@ -181,6 +194,30 @@ func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Fl
 		}
 		b.WriteString(`</section>`)
 	})
+}
+
+func edaAutoImportStatus(b *strings.Builder, status EDAAutoImportStatus) {
+	b.WriteString(`<table class="status-table"><tbody>`)
+	state := "deaktiviert"
+	if status.Enabled {
+		state = "aktiv"
+	}
+	fmt.Fprintf(b, `<tr><th>Automatik</th><td>%s</td></tr>`, esc(state))
+	if status.Enabled {
+		fmt.Fprintf(b, `<tr><th>Zeitplan</th><td><code>%s</code> in Europe/Vienna, letzte %d abgeschlossene Tage</td></tr>`, esc(status.Schedule), status.LookbackDays)
+		fmt.Fprintf(b, `<tr><th>Nächster Lauf</th><td>%s</td></tr>`, esc(formatTimeOr(status.NextRun, "Noch nicht geplant.")))
+	}
+	fmt.Fprintf(b, `<tr><th>Letzter Aufruf</th><td>%s</td></tr>`, esc(formatTimeOr(status.LastStartedAt, "Noch nicht ausgeführt.")))
+	result := status.LastResult
+	if status.LastSuccess == nil && status.LastStartedAt != nil && status.LastFinishedAt == nil {
+		result = "läuft"
+	} else if status.LastSuccess != nil && !*status.LastSuccess {
+		result = "Fehler: " + status.LastError
+	} else if result == "" {
+		result = "Noch keine Ausführung protokolliert."
+	}
+	fmt.Fprintf(b, `<tr><th>Letztes Ergebnis</th><td>%s</td></tr>`, esc(result))
+	b.WriteString(`</tbody></table>`)
 }
 
 func UserEdit(user db.User, form UserForm, meters []db.MeterOverview) templ.Component {
@@ -322,6 +359,17 @@ func period(from, to *time.Time) string {
 	return from.Local().Format("02.01.2006") + " - " + to.Local().Format("02.01.2006")
 }
 
+func formatTimeOr(t *time.Time, fallback string) string {
+	if t == nil || t.IsZero() {
+		return fallback
+	}
+	loc, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		loc = time.Local
+	}
+	return t.In(loc).Format("02.01.2006 15:04")
+}
+
 func shortMetric(label string) string {
 	label = strings.TrimSuffix(label, " [KWH]")
 	if len(label) <= 46 {
@@ -345,6 +393,7 @@ h1{font-size:34px;line-height:1.1;margin:0 0 8px}h2{font-size:22px;margin:32px 0
 dl{display:grid;grid-template-columns:1fr auto;gap:6px 10px;margin:14px 0 0}dt{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}.summary-card dt{white-space:normal;overflow:visible;text-overflow:clip}
 .auth-panel{max-width:420px;margin:8vh auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:28px}.stack{display:grid;gap:14px}.wide{max-width:740px}label{display:grid;gap:6px;font-weight:650}input,select{width:100%;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:inherit;background:#fff}button,.button{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:10px 14px;font-weight:750;text-decoration:none;cursor:pointer}.secondary{background:#e6f2f0;color:var(--accent-2)}.link{background:transparent;color:var(--accent-2);padding:0}.back{display:inline-block;margin-bottom:18px;color:var(--accent-2);text-decoration:none}
 table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}th{font-size:13px;color:var(--muted);background:#f9fbfb}.num{text-align:right;font-variant-numeric:tabular-nums}.actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.actions form{display:inline}
+.status-table{margin:14px 0 20px}.status-table th{width:180px}.status-table td{overflow-wrap:anywhere}
 .filter{display:flex;gap:12px;align-items:end;margin:20px 0}.chart-wrap{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto}.chart{width:100%;min-width:640px;height:auto}.axis{stroke:#c7d2d8;stroke-width:1}.line{fill:none;stroke:var(--accent);stroke-width:3}.tick{fill:#60707b;font-size:12px}.chart-title{fill:#1e2a32;font-weight:700;font-size:14px}.empty{background:#fff;border:1px dashed var(--line);border-radius:8px;padding:18px;color:var(--muted)}
 .flash{border-radius:8px;padding:12px 14px;margin-bottom:18px;background:#e6f2f0;color:#134e4a}.flash.error{background:#fee4e2;color:var(--danger)}fieldset{border:1px solid var(--line);border-radius:8px;padding:14px}.checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px}.check{display:flex;align-items:center;gap:8px;font-weight:500}.check input{width:auto}
 @media (max-width:700px){header{padding:0 16px}main{padding:22px 14px 48px}.toolbar,.filter{display:grid}h1{font-size:28px}}

@@ -98,6 +98,15 @@ type ImportBatch struct {
 	UploadedByUserID *int64
 }
 
+type ScheduledImportStatus struct {
+	Name           string
+	LastStartedAt  *time.Time
+	LastFinishedAt *time.Time
+	LastSuccess    *bool
+	LastResult     string
+	LastError      string
+}
+
 type OverviewSummary struct {
 	MeteringPointID string
 	Direction       string

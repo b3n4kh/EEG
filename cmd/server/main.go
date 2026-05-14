@@ -43,6 +43,19 @@ func run() error {
 	}
 
 	server := web.New(database, cfg.DevMode, cfg.EDA)
+	if err := server.StartEDAAutoImport(context.Background(), web.EDAAutoImportConfig{
+		Enabled:  cfg.EDAAutoImport.Enabled,
+		Schedule: cfg.EDAAutoImport.Schedule,
+	}); err != nil {
+		return err
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.StopEDAAutoImport(ctx); err != nil {
+			slog.Error("stop EDA auto import scheduler", "error", err)
+		}
+	}()
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           server.Routes(),

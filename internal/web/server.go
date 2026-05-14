@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/a-h/templ"
@@ -34,6 +35,8 @@ type Server struct {
 	Importer imports.Importer
 	EDA      eda.Client
 	Sessions *scs.SessionManager
+	importMu sync.Mutex
+	edaAuto  *EDAAutoImporter
 }
 
 func New(database *db.DB, devMode bool, edaConfigs ...eda.Config) *Server {
@@ -242,7 +245,12 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, views.Admin(user, meters, users, s.takeFlash(r.Context()), s.EDA.Config.Enabled()))
+	autoImport, err := s.edaAutoImportStatus(r.Context())
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, views.Admin(user, meters, users, s.takeFlash(r.Context()), s.EDA.Config.Enabled(), autoImport))
 }
 
 func (s *Server) newUserForm(w http.ResponseWriter, r *http.Request) {
@@ -541,6 +549,8 @@ func (s *Server) importEDA(ctx context.Context, from, to time.Time, uploadedBy *
 		slog.Error("EDA import requested but not configured")
 		return db.ImportSummary{}, fmt.Errorf("EDA import is not configured")
 	}
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
 	slog.Info("running EDA import", "from", from.Format(time.RFC3339), "to", to.Format(time.RFC3339), "uploaded_by_user_id", uploadedBy)
 	parsed, err := s.EDA.Fetch(ctx, from, to)
 	if err != nil {

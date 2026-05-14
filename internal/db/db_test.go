@@ -63,6 +63,34 @@ func TestAssignMetersReplacesExistingAssignments(t *testing.T) {
 	require.Equal(t, map[string]bool{"AT002": true, "AT003": true}, assigned)
 }
 
+func TestScheduledImportStatusRecordsStartedAndFinished(t *testing.T) {
+	ctx := context.Background()
+	database := testsupport.DB(t)
+	started := time.Date(2026, 5, 14, 1, 0, 0, 0, time.UTC)
+	finished := started.Add(2 * time.Minute)
+
+	status, err := database.ScheduledImportStatus(ctx, "eda_auto_import")
+	require.NoError(t, err)
+	require.Equal(t, "eda_auto_import", status.Name)
+	require.Nil(t, status.LastStartedAt)
+
+	require.NoError(t, database.RecordScheduledImportStarted(ctx, "eda_auto_import", started))
+	status, err = database.ScheduledImportStatus(ctx, "eda_auto_import")
+	require.NoError(t, err)
+	require.Equal(t, started, *status.LastStartedAt)
+	require.Nil(t, status.LastFinishedAt)
+	require.Nil(t, status.LastSuccess)
+	require.Equal(t, "running", status.LastResult)
+
+	require.NoError(t, database.RecordScheduledImportFinished(ctx, "eda_auto_import", started, finished, true, "13 gelesen", ""))
+	status, err = database.ScheduledImportStatus(ctx, "eda_auto_import")
+	require.NoError(t, err)
+	require.Equal(t, finished, *status.LastFinishedAt)
+	require.NotNil(t, status.LastSuccess)
+	require.True(t, *status.LastSuccess)
+	require.Equal(t, "13 gelesen", status.LastResult)
+}
+
 func TestParticipantVisibilityExcludesTotalAndUnassignedMeters(t *testing.T) {
 	ctx := context.Background()
 	database := testsupport.DB(t)

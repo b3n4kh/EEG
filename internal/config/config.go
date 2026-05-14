@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ben/eeg-sumsum/internal/eda"
 )
@@ -17,7 +18,13 @@ type Config struct {
 	AdminPassword string
 	AdminAPIToken string
 	EDA           eda.Config
+	EDAAutoImport EDAAutoImportConfig
 	DevMode       bool
+}
+
+type EDAAutoImportConfig struct {
+	Enabled  bool
+	Schedule string
 }
 
 func Load() (Config, error) {
@@ -34,6 +41,10 @@ func Load() (Config, error) {
 			Password:       os.Getenv("EDA_PASSWORD"),
 			CommunityID:    os.Getenv("EDA_COMMUNITY_ID"),
 			MeteringPoints: os.Getenv("EDA_METERING_POINTS"),
+		},
+		EDAAutoImport: EDAAutoImportConfig{
+			Enabled:  envBool("EDA_AUTO_IMPORT_ENABLED", true),
+			Schedule: env("EDA_AUTO_IMPORT_CRON", "15 3 * * *"),
 		},
 		DevMode: env("APP_ENV", "dev") == "dev",
 	}
@@ -55,4 +66,17 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

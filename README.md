@@ -166,6 +166,8 @@ curl -fsS http://localhost:8080/healthz
 | `EDA_PASSWORD` | leer | EDA Portal Passwort |
 | `EDA_COMMUNITY_ID` | leer | Interne EDA Energy-Community-ID |
 | `EDA_METERING_POINTS` | leer | Optionaler Fallback, falls die Community-Detail-API keine Zaehlpunkte liefert: `ZP_ID:CONSUMPTION,ZP_ID:GENERATION` |
+| `EDA_AUTO_IMPORT_ENABLED` | `true` | Aktiviert den taeglichen automatischen EDA Import, sobald EDA konfiguriert ist |
+| `EDA_AUTO_IMPORT_CRON` | `15 3 * * *` | Cron-Zeitplan fuer den automatischen EDA Import in `Europe/Vienna` |
 
 ## API
 
@@ -202,6 +204,8 @@ curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
 ```
 
 Der EDA Import liest die Zaehlpunkte aus der Energy-Community Detail-API und importiert pro Zaehlpunkt die taeglichen `consumptionsurya/g` und `consumptionsurya/p` Messreihen. Daraus werden die gleichen Messgroessen wie im XLSX Import abgeleitet, inklusive synthetischer `TOTAL`-Reihen. Die EDA-Zeitstempel werden als `Europe/Vienna` interpretiert und UTC gespeichert.
+
+Wenn EDA konfiguriert ist, startet der Server zusaetzlich einen automatischen Import ueber `github.com/robfig/cron/v3`. Standardmaessig laeuft er taeglich um 03:15 Uhr `Europe/Vienna` und importiert die letzten 30 abgeschlossenen Tage bis gestern 23:45. Die Administration zeigt den letzten automatischen Aufruf, dessen Ergebnis und den naechsten geplanten Lauf. Der manuelle EDA Import per Formular und API bleibt unveraendert.
 
 Zaehlpunkte muessen 33 Zeichen lang sein, mit `AT00` beginnen und duerfen keine eingebetteten Community-Codes wie `RC107893` enthalten. Im lokalen Dev-Modus loggt der EDA Import die Zaehlpunkt-Erkennung und uebersprungene Kandidaten mit `LOG_LEVEL=debug`.
 
