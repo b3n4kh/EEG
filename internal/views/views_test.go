@@ -42,7 +42,16 @@ func TestParticipantDashboardRendersPerMeterSummaryAndMeterLinks(t *testing.T) {
 		}},
 		Flash{},
 	))
-	for _, want := range []string{"50.000 kWh", "200.000 kWh", "25.0%", `href="/meters/AT001"`, "coverage-chart"} {
+	for _, want := range []string{
+		"50,00 kWh",
+		"200,00 kWh",
+		"25,0%",
+		`href="/meters/AT001"`,
+		"coverage-chart",
+		"Wie viel aus der Energiegemeinschaft bezogen wurde",
+		"Wie viel insgesamt von deinem Zählpunkt verbraucht wurde",
+		"Wie viel Prozent deines Verbrauchs aus der Energiegemeinschaft gedeckt wurde",
+	} {
 		require.Contains(t, html, want)
 	}
 	require.NotContains(t, html, "Administration")

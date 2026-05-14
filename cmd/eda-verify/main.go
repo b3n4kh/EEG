@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ben/eeg-sumsum/internal/displayfmt"
 )
 
 const defaultBaseURL = "https://prod-api.eda-portal.at/api"
@@ -356,17 +358,17 @@ func printDomainSummary(endpoint string, body []byte) {
 			fmt.Printf("typed parse: failed: %v\n", err)
 			return
 		}
-		fmt.Printf("typed parse: success=%t community=%.3f feed=%.3f remainingDemand=%.3f autarky=%.2f%% ownConsumption=%.2f%% grouped=%d\n",
+		fmt.Printf("typed parse: success=%t community=%s feed=%s remainingDemand=%s autarky=%s ownConsumption=%s grouped=%d\n",
 			response.Success,
-			response.Data.Community,
-			response.Data.Feed,
-			response.Data.RemainingDemand,
-			response.Data.Autarky,
-			response.Data.OwnConsumption,
+			displayfmt.Decimal("%.2f", response.Data.Community),
+			displayfmt.Decimal("%.2f", response.Data.Feed),
+			displayfmt.Decimal("%.2f", response.Data.RemainingDemand),
+			displayfmt.Decimal("%.2f", response.Data.Autarky)+"%",
+			displayfmt.Decimal("%.2f", response.Data.OwnConsumption)+"%",
 			len(response.Data.CommunityGrouped),
 		)
 		for _, group := range response.Data.CommunityGrouped {
-			fmt.Printf("  communityGrouped[%s]=%.3f\n", group.EnixiGenerationType, group.Sum)
+			fmt.Printf("  communityGrouped[%s]=%s\n", group.EnixiGenerationType, displayfmt.Decimal("%.2f", group.Sum))
 		}
 	case "meterdata":
 		var response meterResponse
@@ -374,12 +376,12 @@ func printDomainSummary(endpoint string, body []byte) {
 			fmt.Printf("typed parse: failed: %v\n", err)
 			return
 		}
-		fmt.Printf("typed parse: success=%t s=%t substitutesOrMissingData=%t sumGeneration=%.3f sumFeed=%.3f\n",
+		fmt.Printf("typed parse: success=%t s=%t substitutesOrMissingData=%t sumGeneration=%s sumFeed=%s\n",
 			response.Success,
 			response.S,
 			response.Data.SubstitutesOrMissingData,
-			response.Data.SumGeneration,
-			response.Data.SumFeed,
+			displayfmt.Decimal("%.2f", response.Data.SumGeneration),
+			displayfmt.Decimal("%.2f", response.Data.SumFeed),
 		)
 		printSeriesSummary("generationSeries", response.Data.GenerationSeries)
 		printSeriesSummary("feedSeries", response.Data.FeedSeries)
@@ -402,12 +404,12 @@ func printSeriesSummary(label string, series []meterSeriesPoint) {
 		}
 		methodCounts[*point.Methods]++
 	}
-	fmt.Printf("  %s: len=%d first=%s last=%s valueSum=%.3f nullMethods=%d methods=%s\n",
+	fmt.Printf("  %s: len=%d first=%s last=%s valueSum=%s nullMethods=%d methods=%s\n",
 		label,
 		len(series),
 		series[0].Date.Format("2006-01-02T15:04:05-07:00"),
 		series[len(series)-1].Date.Format("2006-01-02T15:04:05-07:00"),
-		total,
+		displayfmt.Decimal("%.2f", total),
 		nullMethods,
 		formatMethodCounts(methodCounts),
 	)

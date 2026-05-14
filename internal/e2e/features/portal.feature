@@ -14,10 +14,10 @@ Feature: Participant portal journeys
     And participant dashboard data exists for assigned, unassigned, and total meters
     When I log in as "teilnehmer" with password "secret12345"
     And I open "/"
-    Then the response contains "50.000 kWh"
-    And the response contains "200.000 kWh"
-    And the response does not contain "700.000 kWh"
-    And the response does not contain "999.000 kWh"
+    Then the response contains "50,00 kWh"
+    And the response contains "200,00 kWh"
+    And the response does not contain "700,00 kWh"
+    And the response does not contain "999,00 kWh"
     When I open "/meters/AT002"
     Then the response status is 404
     When I open "/meters/TOTAL"
@@ -42,5 +42,5 @@ Feature: Participant portal journeys
     Then the response contains "Passwort ändern"
     When I change the password from "initial12345" to "changed12345"
     Then the response contains "Dashboard"
-    And the response contains "10.000 kWh"
+    And the response contains "10,00 kWh"
     And the response does not contain "TOTAL"

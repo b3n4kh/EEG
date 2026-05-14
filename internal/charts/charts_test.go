@@ -36,8 +36,8 @@ func TestLineSVGFlatSeriesExpandsScale(t *testing.T) {
 		{IntervalStart: time.Date(2026, 5, 1, 0, 15, 0, 0, time.UTC), Value: 7},
 	}
 	got := LineSVG(points, "Flat")
-	require.Contains(t, got, "8.000 kWh")
-	require.Contains(t, got, "7.000 kWh")
+	require.Contains(t, got, "8,00 kWh")
+	require.Contains(t, got, "7,00 kWh")
 	require.NotContains(t, got, "NaN")
 	require.NotContains(t, got, "+Inf")
 }

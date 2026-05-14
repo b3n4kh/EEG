@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ben/eeg-sumsum/internal/db"
+	"github.com/ben/eeg-sumsum/internal/displayfmt"
 )
 
 func LineSVG(points []db.SeriesPoint, title string) string {
@@ -43,8 +44,8 @@ func LineSVG(points []db.SeriesPoint, title string) string {
   <line x1="%d" y1="%d" x2="%d" y2="%d" class="axis"/>
   <line x1="%d" y1="%d" x2="%d" y2="%d" class="axis"/>
   <text x="%d" y="18" class="chart-title">%s</text>
-  <text x="%d" y="%d" class="tick">%.3f kWh</text>
-  <text x="%d" y="%d" class="tick">%.3f kWh</text>
+  <text x="%d" y="%d" class="tick">%s</text>
+  <text x="%d" y="%d" class="tick">%s</text>
   <text x="%d" y="%d" class="tick">%s</text>
   <text x="%d" y="%d" text-anchor="end" class="tick">%s</text>
   <path d="%s" class="line"/>
@@ -52,8 +53,8 @@ func LineSVG(points []db.SeriesPoint, title string) string {
 		padX, height-padY, width-padX, height-padY,
 		padX, padY, padX, height-padY,
 		padX, html.EscapeString(title),
-		padX+4, padY+8, max,
-		padX+4, height-padY-6, min,
+		padX+4, padY+8, displayfmt.KWh(max),
+		padX+4, height-padY-6, displayfmt.KWh(min),
 		padX, height-6, html.EscapeString(first),
 		width-padX, height-6, html.EscapeString(last),
 		path.String())

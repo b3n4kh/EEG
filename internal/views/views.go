@@ -12,6 +12,7 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/ben/eeg-sumsum/internal/db"
+	"github.com/ben/eeg-sumsum/internal/displayfmt"
 )
 
 type Flash struct {
@@ -112,10 +113,12 @@ func meterSummaryCard(b *strings.Builder, summary db.ParticipantMeterSummary) {
 		fmt.Fprintf(b, `<p>%s</p>`, esc(p))
 	}
 	b.WriteString(`<dl>`)
-	fmt.Fprintf(b, `<dt>%s</dt><dd>%.3f kWh</dd>`, esc(db.MetricCommunityShareLabel), summary.CommunityShareKWh)
-	fmt.Fprintf(b, `<dt>%s</dt><dd>%.3f kWh</dd>`, esc(db.MetricTotalConsumptionLabel), summary.TotalConsumptionKWh)
-	b.WriteString(`<dt>Deckung</dt>`)
-	fmt.Fprintf(b, `<dd>%.1f%%</dd>`, summary.CoveragePercent)
+	metricTerm(b, db.MetricCommunityShareLabel, "Wie viel aus der Energiegemeinschaft bezogen wurde")
+	fmt.Fprintf(b, `<dd>%s</dd>`, displayfmt.KWh(summary.CommunityShareKWh))
+	metricTerm(b, db.MetricTotalConsumptionLabel, "Wie viel insgesamt von deinem Zählpunkt verbraucht wurde")
+	fmt.Fprintf(b, `<dd>%s</dd>`, displayfmt.KWh(summary.TotalConsumptionKWh))
+	metricTerm(b, "Deckung", "Wie viel Prozent deines Verbrauchs aus der Energiegemeinschaft gedeckt wurde")
+	fmt.Fprintf(b, `<dd>%s</dd>`, displayfmt.Percent1(summary.CoveragePercent))
 	b.WriteString(`</dl>`)
 	chartPercent := summary.CoveragePercent
 	if chartPercent < 0 {
@@ -124,8 +127,23 @@ func meterSummaryCard(b *strings.Builder, summary db.ParticipantMeterSummary) {
 	if chartPercent > 100 {
 		chartPercent = 100
 	}
-	fmt.Fprintf(b, `<div class="coverage-chart" role="img" aria-label="%.1f Prozent Deckung"><span style="width:%.1f%%"></span></div>`, summary.CoveragePercent, chartPercent)
+	fmt.Fprintf(b, `<div class="coverage-chart" role="img" aria-label="%s Prozent Deckung"><span style="width:%.1f%%"></span></div>`, displayfmt.Decimal("%.1f", summary.CoveragePercent), chartPercent)
 	b.WriteString(`</section>`)
+}
+
+func metricTerm(b *strings.Builder, label, tooltip string) {
+	fmt.Fprintf(b, `<dt class="has-tip"><span class="term-tip" title="%s" data-tooltip="%s" aria-label="%s. %s" tabindex="0">%s</span></dt>`, esc(tooltip), esc(tooltip), esc(label), esc(tooltip), esc(label))
+}
+
+func metricTooltip(label string) (string, bool) {
+	switch label {
+	case db.MetricCommunityShareLabel:
+		return "Wie viel aus der Energiegemeinschaft bezogen wurde", true
+	case db.MetricTotalConsumptionLabel:
+		return "Wie viel insgesamt von deinem Zählpunkt verbraucht wurde", true
+	default:
+		return "", false
+	}
 }
 
 func Meter(user db.User, meter db.MeterOverview, metrics []db.MetricTotal, selectedMetric string, chartSVG string, points []db.SeriesPoint) templ.Component {
@@ -147,7 +165,7 @@ func Meter(user db.User, meter db.MeterOverview, metrics []db.MetricTotal, selec
 			start = 0
 		}
 		for i := len(points) - 1; i >= start; i-- {
-			fmt.Fprintf(b, `<tr><td>%s</td><td class="num">%.3f kWh</td></tr>`, esc(points[i].IntervalStart.Local().Format("02.01.2006")), points[i].Value)
+			fmt.Fprintf(b, `<tr><td>%s</td><td class="num">%s</td></tr>`, esc(points[i].IntervalStart.Local().Format("02.01.2006")), displayfmt.KWh(points[i].Value))
 		}
 		b.WriteString(`</tbody></table></section>`)
 	})
@@ -325,7 +343,13 @@ func meterCards(b *strings.Builder, meters []db.MeterOverview) {
 				if i >= 3 {
 					break
 				}
-				fmt.Fprintf(b, `<dt>%s</dt><dd>%.3f kWh</dd>`, esc(shortMetric(total.Label)), total.Sum)
+				label := shortMetric(total.Label)
+				if tooltip, ok := metricTooltip(total.Label); ok {
+					metricTerm(b, label, tooltip)
+				} else {
+					fmt.Fprintf(b, `<dt>%s</dt>`, esc(label))
+				}
+				fmt.Fprintf(b, `<dd>%s</dd>`, displayfmt.KWh(total.Sum))
 			}
 			b.WriteString(`</dl>`)
 		}
@@ -390,7 +414,7 @@ header{height:64px;display:flex;align-items:center;justify-content:space-between
 h1{font-size:34px;line-height:1.1;margin:0 0 8px}h2{font-size:22px;margin:32px 0 14px}p{color:var(--muted);margin:0 0 16px}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:22px}
 .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:26px}.summary-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;min-height:220px}.summary-card h2{font-size:18px;margin:0 0 6px;overflow-wrap:anywhere}.summary-card p{font-size:14px;margin-bottom:14px}.coverage-chart{height:14px;border-radius:999px;background:#e6edf0;overflow:hidden;margin-top:16px}.coverage-chart span{display:block;height:100%;background:var(--accent)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}.card{display:block;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;color:inherit;text-decoration:none;min-height:160px}.card:hover{border-color:var(--accent);box-shadow:0 10px 24px rgba(15,118,110,.08)}.card strong{display:block;overflow-wrap:anywhere}.card span{display:block;color:var(--muted);font-size:14px;margin-top:4px}
-dl{display:grid;grid-template-columns:1fr auto;gap:6px 10px;margin:14px 0 0}dt{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}.summary-card dt{white-space:normal;overflow:visible;text-overflow:clip}
+dl{display:grid;grid-template-columns:1fr auto;gap:6px 10px;margin:14px 0 0}dt{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}dt.has-tip{overflow:visible}dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}.summary-card dt{white-space:normal;overflow:visible;text-overflow:clip}.term-tip{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:3px}.term-tip:hover:after,.term-tip:focus:after{content:attr(data-tooltip);position:absolute;left:0;bottom:calc(100% + 8px);z-index:5;width:max-content;max-width:min(300px,80vw);padding:8px 10px;border-radius:6px;background:#1e2a32;color:#fff;font-size:12px;line-height:1.35;font-weight:600;white-space:normal;box-shadow:0 8px 20px rgba(30,42,50,.18)}
 .auth-panel{max-width:420px;margin:8vh auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:28px}.stack{display:grid;gap:14px}.wide{max-width:740px}label{display:grid;gap:6px;font-weight:650}input,select{width:100%;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:inherit;background:#fff}button,.button{border:0;border-radius:8px;background:var(--accent);color:#fff;padding:10px 14px;font-weight:750;text-decoration:none;cursor:pointer}.secondary{background:#e6f2f0;color:var(--accent-2)}.link{background:transparent;color:var(--accent-2);padding:0}.back{display:inline-block;margin-bottom:18px;color:var(--accent-2);text-decoration:none}
 table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}th{font-size:13px;color:var(--muted);background:#f9fbfb}.num{text-align:right;font-variant-numeric:tabular-nums}.actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.actions form{display:inline}
 .status-table{margin:14px 0 20px}.status-table th{width:180px}.status-table td{overflow-wrap:anywhere}

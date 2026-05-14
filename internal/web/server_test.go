@@ -144,12 +144,12 @@ func TestParticipantDashboardShowsSimplifiedSummary(t *testing.T) {
 	for _, want := range []string{
 		db.MetricCommunityShareLabel,
 		db.MetricTotalConsumptionLabel,
-		"50.000 kWh",
-		"200.000 kWh",
-		"300.000 kWh",
-		"600.000 kWh",
-		"25.0%",
-		"50.0%",
+		"50,00 kWh",
+		"200,00 kWh",
+		"300,00 kWh",
+		"600,00 kWh",
+		"25,0%",
+		"50,0%",
 		"coverage-chart",
 		`href="/meters/AT001"`,
 		`href="/meters/AT002"`,
@@ -158,7 +158,7 @@ func TestParticipantDashboardShowsSimplifiedSummary(t *testing.T) {
 			t.Fatalf("dashboard body does not contain %q: %s", want, page)
 		}
 	}
-	for _, forbidden := range []string{"350.000 kWh", "700.000 kWh", "800.000 kWh", "999.000 kWh", "43.8%"} {
+	for _, forbidden := range []string{"350,00 kWh", "700,00 kWh", "800,00 kWh", "999,00 kWh", "43,8%"} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("dashboard body contains forbidden aggregate %q: %s", forbidden, page)
 		}
