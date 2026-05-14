@@ -20,6 +20,19 @@ func TestConfiguredMeteringPointsParsesDirectionsAndOperators(t *testing.T) {
 	require.Equal(t, meterPoint{ID: "AT0010000000000000001000000000002", Direction: directionGeneration, NetworkOperator: "OP2"}, points[1])
 }
 
+func TestConfigNormalizesSeriesBaseURL(t *testing.T) {
+	prod := Config{}.normalized()
+	require.Equal(t, DefaultBaseURL, prod.BaseURL)
+	require.Equal(t, DefaultSeriesBaseURL, prod.SeriesBaseURL)
+
+	custom := Config{BaseURL: "https://eda.example.test/api/"}.normalized()
+	require.Equal(t, "https://eda.example.test/api", custom.BaseURL)
+	require.Equal(t, "https://eda.example.test/api", custom.SeriesBaseURL)
+
+	override := Config{BaseURL: DefaultBaseURL, SeriesBaseURL: "https://series.example.test/api/"}.normalized()
+	require.Equal(t, "https://series.example.test/api", override.SeriesBaseURL)
+}
+
 func TestParticipantAccountsFromCommunityDedupesAndSortsMeters(t *testing.T) {
 	raw, err := json.Marshal(map[string]any{
 		"data": map[string]any{

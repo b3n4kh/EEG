@@ -40,6 +40,8 @@ Weitere relevante ENV:
 - `SESSION_SECRET`: ausserhalb von `APP_ENV=dev` erforderlich
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: erzeugt oder aktualisiert Admin beim Start
 - `ADMIN_API_TOKEN`: optionaler Bearer Token fuer XLSX Upload API
+- `EDA_BASE_URL`: EDA API fuer Login und Energy-Community Details
+- `EDA_SERIES_BASE_URL`: EDA API fuer `consumptionsurya/g` und `consumptionsurya/p`
 
 ## API
 
@@ -57,6 +59,8 @@ Endpoint:
 - Auth: `Authorization: Bearer <token>`
 - Body: multipart field `file`
 - Response: JSON mit Insert/Update/Skip-Zaehlung
+
+EDA Portal Endpunkte, Host-Split und Response-Shapes sind in `docs/eda-api.md` dokumentiert.
 
 ## Architektur
 

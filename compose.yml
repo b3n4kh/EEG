@@ -15,6 +15,7 @@ services:
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       EDA_BASE_URL: ${EDA_BASE_URL:-https://prod-api.eda-portal.at/api}
+      EDA_SERIES_BASE_URL: ${EDA_SERIES_BASE_URL:-https://prod.eda-portal.at/api}
       EDA_USERNAME: ${EDA_USERNAME:-}
       EDA_PASSWORD: ${EDA_PASSWORD:-}
       EDA_COMMUNITY_ID: ${EDA_COMMUNITY_ID:-}

@@ -37,6 +37,7 @@ func Load() (Config, error) {
 		AdminAPIToken: os.Getenv("ADMIN_API_TOKEN"),
 		EDA: eda.Config{
 			BaseURL:        env("EDA_BASE_URL", eda.DefaultBaseURL),
+			SeriesBaseURL:  os.Getenv("EDA_SERIES_BASE_URL"),
 			Username:       os.Getenv("EDA_USERNAME"),
 			Password:       os.Getenv("EDA_PASSWORD"),
 			CommunityID:    os.Getenv("EDA_COMMUNITY_ID"),

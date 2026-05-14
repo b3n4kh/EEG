@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://prod-api.eda-portal.at/api"
-	defaultGroupBy = "day"
+	DefaultBaseURL       = "https://prod-api.eda-portal.at/api"
+	DefaultSeriesBaseURL = "https://prod.eda-portal.at/api"
+	defaultGroupBy       = "day"
 )
 
 var viennaLocation = mustLoadLocation("Europe/Vienna")
@@ -60,6 +61,7 @@ const (
 
 type Config struct {
 	BaseURL        string
+	SeriesBaseURL  string
 	Username       string
 	Password       string
 	CommunityID    string
@@ -76,6 +78,13 @@ func (c Config) normalized() Config {
 	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
 	if c.BaseURL == "" {
 		c.BaseURL = DefaultBaseURL
+	}
+	c.SeriesBaseURL = strings.TrimRight(strings.TrimSpace(c.SeriesBaseURL), "/")
+	if c.SeriesBaseURL == "" {
+		c.SeriesBaseURL = c.BaseURL
+		if c.BaseURL == DefaultBaseURL {
+			c.SeriesBaseURL = DefaultSeriesBaseURL
+		}
 	}
 	c.Username = strings.TrimSpace(c.Username)
 	c.Password = strings.TrimSpace(c.Password)
@@ -97,6 +106,7 @@ func (c Client) Fetch(ctx context.Context, from, to time.Time) (imports.ParsedFi
 		"from", formatEDATime(from),
 		"to", formatEDATime(to),
 		"base_url", cfg.BaseURL,
+		"series_base_url", cfg.SeriesBaseURL,
 	)
 	if !cfg.Enabled() {
 		return imports.ParsedFile{}, errors.New("EDA import is not configured")
@@ -349,7 +359,7 @@ func (c Client) fetchConsumptionSeries(ctx context.Context, httpClient *http.Cli
 		EnergyCommunityID: cfg.CommunityID,
 		Name:              meteringPointID,
 	}
-	apiURL := cfg.BaseURL + "/consumptionsurya/" + kind + "/" + url.PathEscape(meteringPointID)
+	apiURL := cfg.SeriesBaseURL + "/consumptionsurya/" + kind + "/" + url.PathEscape(meteringPointID)
 	slog.Debug("EDA HTTP series request", "url", apiURL, "kind", kind, "metering_point_id", meteringPointID, "group_by", request.GroupBy, "from", request.Time.In.Min, "to", request.Time.In.Max)
 	raw, err := postRaw(ctx, httpClient, apiURL, token, body)
 	if err != nil {

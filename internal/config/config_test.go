@@ -38,6 +38,7 @@ func TestLoadReadsOverrides(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "admin-password")
 	t.Setenv("ADMIN_API_TOKEN", "api-token")
 	t.Setenv("EDA_BASE_URL", "https://eda.example.test/api")
+	t.Setenv("EDA_SERIES_BASE_URL", "https://eda-series.example.test/api")
 	t.Setenv("EDA_USERNAME", "eda-user")
 	t.Setenv("EDA_PASSWORD", "eda-pass")
 	t.Setenv("EDA_COMMUNITY_ID", "community")
@@ -55,6 +56,7 @@ func TestLoadReadsOverrides(t *testing.T) {
 	require.Equal(t, "admin-password", cfg.AdminPassword)
 	require.Equal(t, "api-token", cfg.AdminAPIToken)
 	require.Equal(t, "https://eda.example.test/api", cfg.EDA.BaseURL)
+	require.Equal(t, "https://eda-series.example.test/api", cfg.EDA.SeriesBaseURL)
 	require.Equal(t, "eda-user", cfg.EDA.Username)
 	require.Equal(t, "eda-pass", cfg.EDA.Password)
 	require.Equal(t, "community", cfg.EDA.CommunityID)
@@ -74,6 +76,7 @@ func clearConfigEnv(t *testing.T) {
 		"ADMIN_API_TOKEN",
 		"APP_ENV",
 		"EDA_BASE_URL",
+		"EDA_SERIES_BASE_URL",
 		"EDA_USERNAME",
 		"EDA_PASSWORD",
 		"EDA_COMMUNITY_ID",
