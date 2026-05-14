@@ -5,6 +5,7 @@ Modernes SSR-Portal fuer Energiegemeinschaften: XLSX-Reports importieren, Messwe
 ## Was die App macht
 
 - Importiert EDA/EEG XLSX-Dateien mit `Übersicht` und `Energiedaten`
+- Importiert aggregierte EDA-Portal-Daten ueber die EDA API
 - Speichert Viertelstundenwerte idempotent in SQLite
 - Verhindert Duplikate bei mehrfachen oder ueberlappenden Uploads
 - Bietet Login fuer Teilnehmer und Administratoren
@@ -44,6 +45,15 @@ XLSX Upload per API:
 curl -H "Authorization: Bearer dev-token" \
   -F "file=@./imports/report.xlsx" \
   http://localhost:8080/api/admin/imports
+```
+
+EDA Import per API:
+
+```sh
+curl -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"from":"2026-05-01","to":"2026-05-14"}' \
+  http://localhost:8080/api/admin/eda-imports
 ```
 
 ## Deployment mit Podman
@@ -147,6 +157,13 @@ curl -fsS http://localhost:8080/healthz
 | `ADMIN_USERNAME` | leer | Erstellt oder aktualisiert Admin beim Start |
 | `ADMIN_PASSWORD` | leer | Passwort fuer Bootstrap-Admin |
 | `ADMIN_API_TOKEN` | leer | Bearer Token fuer XLSX Uploads |
+| `EDA_BASE_URL` | `https://prod-api.eda-portal.at/api` | EDA API Basis-URL |
+| `EDA_USERNAME` | leer | EDA Portal Login |
+| `EDA_PASSWORD` | leer | EDA Portal Passwort |
+| `EDA_COMMUNITY_ID` | leer | Interne EDA Energy-Community-ID |
+| `EDA_METERING_POINT_ID` | `EDA_<EDA_COMMUNITY_ID>` | Lokale synthetische Zaehlpunkt-ID fuer EDA Aggregatsdaten |
+| `EDA_METERING_POINT_NAME` | `EDA Community <EDA_COMMUNITY_ID>` | Anzeigename fuer den synthetischen EDA Zaehlpunkt |
+| `EDA_GROUP_BY` | `day` | Aktuell fuer Import nur `day` unterstuetzt |
 
 ## API
 
@@ -164,6 +181,25 @@ curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
   -F "file=@./imports/report.xlsx" \
   http://localhost:8080/api/admin/imports
 ```
+
+`POST /api/admin/eda-imports`
+
+- Auth: `Authorization: Bearer <ADMIN_API_TOKEN>`
+- Body: optional JSON mit `from` und `to`
+- Datumsformat: `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM` oder RFC3339
+- Ohne Body wird der Vortag in `Europe/Vienna` importiert
+- Ergebnis: JSON mit `measurements_inserted`, `measurements_updated`, `measurements_skipped`
+
+Beispiel:
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"from":"2026-05-01","to":"2026-05-14"}' \
+  http://localhost:8080/api/admin/eda-imports
+```
+
+Der EDA Import speichert die aggregierten Community-Zeitreihen unter einem synthetischen Zaehlpunkt. Standardmaessig ist das `EDA_<EDA_COMMUNITY_ID>`. Die EDA-Zeitstempel werden als `Europe/Vienna` interpretiert und UTC gespeichert.
 
 ## Datenmodell in Kurzform
 

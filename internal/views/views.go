@@ -76,7 +76,7 @@ func Meter(user db.User, meter db.MeterOverview, metrics []db.MetricTotal, selec
 	})
 }
 
-func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Flash) templ.Component {
+func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Flash, edaEnabled bool) templ.Component {
 	return page("Administration", user, func(b *strings.Builder) {
 		flash(b, flashMsg)
 		b.WriteString(`<div class="toolbar"><div><h1>Administration</h1><p>Alle Zählpunkte, Benutzer und Upload-Schnittstelle.</p></div><a class="button" href="/admin/users/new">Benutzer anlegen</a></div>`)
@@ -92,6 +92,18 @@ func Admin(user db.User, meters []db.MeterOverview, users []db.User, flashMsg Fl
 		}
 		b.WriteString(`</tbody></table></section>`)
 		b.WriteString(`<section><h2>XLSX Upload</h2><p>API: <code>POST /api/admin/imports</code> mit <code>Authorization: Bearer &lt;token&gt;</code> und Multipart-Feld <code>file</code>.</p></section>`)
+		b.WriteString(`<section><h2>EDA Import</h2>`)
+		if edaEnabled {
+			today := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+			b.WriteString(`<form method="post" action="/admin/eda-imports" class="filter">`)
+			fmt.Fprintf(b, `<label>Von<input type="date" name="from" value="%s" required></label>`, esc(today))
+			fmt.Fprintf(b, `<label>Bis<input type="date" name="to" value="%s" required></label>`, esc(today))
+			b.WriteString(`<button type="submit">EDA importieren</button></form>`)
+			b.WriteString(`<p>API: <code>POST /api/admin/eda-imports</code> mit <code>Authorization: Bearer &lt;token&gt;</code> und optionalem JSON <code>{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}</code>.</p>`)
+		} else {
+			b.WriteString(`<p>EDA Import ist nicht konfiguriert. Erforderlich sind <code>EDA_USERNAME</code>, <code>EDA_PASSWORD</code> und <code>EDA_COMMUNITY_ID</code>.</p>`)
+		}
+		b.WriteString(`</section>`)
 	})
 }
 

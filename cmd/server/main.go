@@ -41,7 +41,7 @@ func run() error {
 		return err
 	}
 
-	server := web.New(database, cfg.DevMode)
+	server := web.New(database, cfg.DevMode, cfg.EDA)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           server.Routes(),

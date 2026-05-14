@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/a-h/templ"
@@ -18,6 +20,7 @@ import (
 	"github.com/ben/eeg-sumsum/internal/auth"
 	"github.com/ben/eeg-sumsum/internal/charts"
 	"github.com/ben/eeg-sumsum/internal/db"
+	"github.com/ben/eeg-sumsum/internal/eda"
 	"github.com/ben/eeg-sumsum/internal/imports"
 	"github.com/ben/eeg-sumsum/internal/views"
 )
@@ -26,20 +29,26 @@ type Server struct {
 	DB       *db.DB
 	Auth     auth.Service
 	Importer imports.Importer
+	EDA      eda.Client
 	Sessions *scs.SessionManager
 }
 
-func New(database *db.DB, devMode bool) *Server {
+func New(database *db.DB, devMode bool, edaConfigs ...eda.Config) *Server {
 	sessionManager := scs.New()
 	sessionManager.Lifetime = 24 * time.Hour
 	sessionManager.Cookie.HttpOnly = true
 	sessionManager.Cookie.Persist = true
 	sessionManager.Cookie.SameSite = http.SameSiteLaxMode
 	sessionManager.Cookie.Secure = !devMode
+	var edaConfig eda.Config
+	if len(edaConfigs) > 0 {
+		edaConfig = edaConfigs[0]
+	}
 	s := &Server{
 		DB:       database,
 		Auth:     auth.Service{DB: database},
 		Importer: imports.Importer{DB: database},
+		EDA:      eda.Client{Config: edaConfig},
 		Sessions: sessionManager,
 	}
 	return s
@@ -59,6 +68,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/login", s.login)
 	r.Post("/logout", s.logout)
 	r.Post("/api/admin/imports", s.apiImport)
+	r.Post("/api/admin/eda-imports", s.apiEDAImport)
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireLogin)
 		r.Get("/", s.dashboard)
@@ -72,6 +82,7 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/admin/users", s.createUser)
 		r.Get("/admin/users/{id}", s.editUserForm)
 		r.Post("/admin/users/{id}", s.updateUser)
+		r.Post("/admin/eda-imports", s.adminEDAImport)
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusNotFound, views.NotFound(s.currentUser(r.Context())))
@@ -168,7 +179,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, views.Admin(user, meters, users, s.takeFlash(r.Context())))
+	s.render(w, r, http.StatusOK, views.Admin(user, meters, users, s.takeFlash(r.Context()), s.EDA.Config.Enabled()))
 }
 
 func (s *Server) newUserForm(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +348,64 @@ func (s *Server) apiImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summary)
 }
 
+func (s *Server) apiEDAImport(w http.ResponseWriter, r *http.Request) {
+	token := auth.ConstantTimeBearer(r.Header.Get("Authorization"))
+	ok, err := s.Auth.CheckAPIToken(r.Context(), token)
+	if err != nil {
+		s.writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		s.writeJSONError(w, http.StatusUnauthorized, "invalid api token")
+		return
+	}
+	from, to, err := edaRange(r)
+	if err != nil {
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	summary, err := s.importEDA(r.Context(), from, to, nil)
+	if err != nil {
+		s.writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) adminEDAImport(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+	from, to, err := edaRange(r)
+	if err != nil {
+		s.putFlash(r.Context(), views.Flash{Kind: "error", Message: err.Error()})
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+	user := s.currentUser(r.Context())
+	summary, err := s.importEDA(r.Context(), from, to, &user.ID)
+	if err != nil {
+		s.putFlash(r.Context(), views.Flash{Kind: "error", Message: "EDA Import fehlgeschlagen: " + err.Error()})
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+		return
+	}
+	s.putFlash(r.Context(), views.Flash{Message: fmt.Sprintf("EDA Import abgeschlossen: %d gelesen, %d neu, %d aktualisiert, %d unverändert.",
+		summary.MeasurementsRead, summary.MeasurementsInserted, summary.MeasurementsUpdated, summary.MeasurementsSkipped)})
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+func (s *Server) importEDA(ctx context.Context, from, to time.Time, uploadedBy *int64) (db.ImportSummary, error) {
+	if !s.EDA.Config.Enabled() {
+		return db.ImportSummary{}, fmt.Errorf("EDA import is not configured")
+	}
+	parsed, err := s.EDA.Fetch(ctx, from, to)
+	if err != nil {
+		return db.ImportSummary{}, err
+	}
+	return s.Importer.ImportParsed(ctx, parsed, uploadedBy)
+}
+
 func (s *Server) requireLogin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := s.sessionUserID(r)
@@ -429,6 +498,75 @@ func checkedMeters(r *http.Request) map[string]bool {
 		out[id] = true
 	}
 	return out
+}
+
+func edaRange(r *http.Request) (time.Time, time.Time, error) {
+	loc, err := time.LoadLocation("Europe/Vienna")
+	if err != nil {
+		loc = time.Local
+	}
+	yesterday := time.Now().In(loc).AddDate(0, 0, -1)
+	fromValue := strings.TrimSpace(r.FormValue("from"))
+	toValue := strings.TrimSpace(r.FormValue("to"))
+	if fromValue == "" {
+		fromValue = strings.TrimSpace(r.URL.Query().Get("from"))
+	}
+	if toValue == "" {
+		toValue = strings.TrimSpace(r.URL.Query().Get("to"))
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid JSON body")
+		}
+		if body.From != "" {
+			fromValue = strings.TrimSpace(body.From)
+		}
+		if body.To != "" {
+			toValue = strings.TrimSpace(body.To)
+		}
+	}
+	if fromValue == "" {
+		fromValue = yesterday.Format("2006-01-02")
+	}
+	if toValue == "" {
+		toValue = yesterday.Format("2006-01-02")
+	}
+	from, err := parseEDARangeTime(fromValue, true, loc)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid from value %q", fromValue)
+	}
+	to, err := parseEDARangeTime(toValue, false, loc)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid to value %q", toValue)
+	}
+	if to.Before(from) {
+		return time.Time{}, time.Time{}, fmt.Errorf("to must be after from")
+	}
+	return from, to, nil
+}
+
+func parseEDARangeTime(value string, start bool, loc *time.Location) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if len(value) == len("2006-01-02") {
+		t, err := time.ParseInLocation("2006-01-02", value, loc)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if start {
+			return t, nil
+		}
+		return t.Add(23*time.Hour + 45*time.Minute), nil
+	}
+	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05", time.RFC3339} {
+		if t, err := time.ParseInLocation(layout, value, loc); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format")
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

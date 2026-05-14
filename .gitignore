@@ -1,0 +1,16 @@
+# Local environment files
+.env
+.envrc
+
+# Runtime data
+data/
+*.db
+*.db-*
+
+# Build and test artifacts
+tmp/
+coverage.out
+*.test
+
+# OS files
+.DS_Store

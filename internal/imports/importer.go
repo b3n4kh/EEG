@@ -45,6 +45,10 @@ func (i Importer) ImportReader(ctx context.Context, filename string, r io.Reader
 	if err != nil {
 		return db.ImportSummary{}, err
 	}
+	return i.ImportParsed(ctx, parsed, uploadedBy)
+}
+
+func (i Importer) ImportParsed(ctx context.Context, parsed ParsedFile, uploadedBy *int64) (db.ImportSummary, error) {
 	tx, err := i.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return db.ImportSummary{}, err

@@ -19,6 +19,8 @@ import (
 
 const defaultBaseURL = "https://prod-api.eda-portal.at/api"
 
+var viennaLocation = mustLoadLocation("Europe/Vienna")
+
 type options struct {
 	baseURL     string
 	username    string
@@ -29,6 +31,7 @@ type options struct {
 	groupBy     string
 	endpoint    string
 	raw         bool
+	discover    bool
 	timeout     time.Duration
 }
 
@@ -37,6 +40,49 @@ type client struct {
 	communityID string
 	token       string
 	httpClient  *http.Client
+}
+
+type kpiResponse struct {
+	Success bool    `json:"success"`
+	Data    kpiData `json:"data"`
+}
+
+type kpiData struct {
+	Autarky          float64              `json:"autarky"`
+	OwnConsumption   float64              `json:"ownConsumption"`
+	Community        float64              `json:"community"`
+	CommunityGrouped []communityGroupItem `json:"communityGrouped"`
+	Feed             float64              `json:"feed"`
+	RemainingDemand  float64              `json:"remainingDemand"`
+}
+
+type communityGroupItem struct {
+	EnixiGenerationType string  `json:"enixiGenerationType"`
+	Sum                 float64 `json:"sum"`
+}
+
+type meterResponse struct {
+	Success bool      `json:"success"`
+	S       bool      `json:"s"`
+	Data    meterData `json:"data"`
+}
+
+type meterData struct {
+	SubstitutesOrMissingData bool               `json:"substitutesOrMissingData"`
+	SumGeneration            float64            `json:"sumGeneration"`
+	SumFeed                  float64            `json:"sumFeed"`
+	GenerationSeries         []meterSeriesPoint `json:"generationSeries"`
+	FeedSeries               []meterSeriesPoint `json:"feedSeries"`
+}
+
+type meterSeriesPoint struct {
+	Date    edaLocalTime `json:"date"`
+	Value   float64      `json:"value"`
+	Methods *string      `json:"methods"`
+}
+
+type edaLocalTime struct {
+	time.Time
 }
 
 func main() {
@@ -69,6 +115,14 @@ func run() error {
 	} else {
 		fmt.Printf("login: ok, token expires at %s\n", expiry.Format(time.RFC3339))
 	}
+	if opts.discover {
+		if err := c.discover(ctx, opts.raw); err != nil {
+			return err
+		}
+		if opts.communityID == "" {
+			return nil
+		}
+	}
 
 	body := map[string]any{
 		"energyCommunityId": opts.communityID,
@@ -93,11 +147,7 @@ func run() error {
 }
 
 func parseFlags() options {
-	loc, err := time.LoadLocation("Europe/Vienna")
-	if err != nil {
-		loc = time.Local
-	}
-	yesterday := time.Now().In(loc).AddDate(0, 0, -1)
+	yesterday := time.Now().In(viennaLocation).AddDate(0, 0, -1)
 	defaultFrom := yesterday.Format("2006-01-02") + "T00:00"
 	defaultTo := yesterday.Format("2006-01-02") + "T23:45"
 
@@ -111,6 +161,7 @@ func parseFlags() options {
 	flag.StringVar(&opts.groupBy, "group-by", envOr("EDA_GROUP_BY", "day"), "EDA groupBy value: day, month, or year")
 	flag.StringVar(&opts.endpoint, "endpoint", envOr("EDA_ENDPOINT", "both"), "endpoint to verify: both, kpiData, or meterdata")
 	flag.BoolVar(&opts.raw, "raw", envBool("EDA_RAW"), "print pretty formatted raw endpoint JSON")
+	flag.BoolVar(&opts.discover, "discover", envBool("EDA_DISCOVER"), "try likely endpoints that list accessible communities before verifying data endpoints")
 	flag.DurationVar(&opts.timeout, "timeout", envDuration("EDA_TIMEOUT", 30*time.Second), "HTTP timeout")
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
@@ -119,6 +170,7 @@ func parseFlags() options {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "Recommended secret handling:")
 		fmt.Fprintln(out, "  EDA_USERNAME='user@example.com' EDA_PASSWORD='...' EDA_COMMUNITY_ID='...' go run ./cmd/eda-verify")
+		fmt.Fprintln(out, "  EDA_USERNAME='user@example.com' EDA_PASSWORD='...' go run ./cmd/eda-verify -discover -raw")
 		fmt.Fprintln(out)
 		flag.PrintDefaults()
 	}
@@ -142,7 +194,7 @@ func (opts options) validate() error {
 	if opts.password == "" {
 		missing = append(missing, "EDA_PASSWORD or -password")
 	}
-	if opts.communityID == "" {
+	if opts.communityID == "" && !opts.discover {
 		missing = append(missing, "EDA_COMMUNITY_ID or -community-id")
 	}
 	if len(missing) > 0 {
@@ -202,9 +254,44 @@ func (c *client) post(ctx context.Context, endpoint string, body any) (int, []by
 		return 0, nil, fmt.Errorf("%s request: %w", endpoint, err)
 	}
 	if status < 200 || status >= 300 {
-		return status, responseBody, fmt.Errorf("%s failed: HTTP %d: %s", endpoint, status, truncateForError(responseBody))
+		return status, responseBody, fmt.Errorf("%s failed: HTTP %d: %s%s", endpoint, status, truncateForError(responseBody), endpointHint(status, responseBody))
 	}
 	return status, responseBody, nil
+}
+
+func (c *client) discover(ctx context.Context, raw bool) error {
+	fmt.Println("\n== discovery ==")
+	fmt.Println("probing likely endpoints for accessible energy communities")
+	candidates := []string{
+		"/pwa/energycommunities",
+		"/pwa/user/energycommunities",
+		"/pwa/energycommunities/list",
+		"/pwa/dashboard/energycommunities",
+		"/v4/energycommunities",
+		"/v4/user/energycommunities",
+		"/v4/me",
+		"/v4/auth/me",
+	}
+	for _, path := range candidates {
+		status, responseBody, err := getJSON(ctx, c.httpClient, c.baseURL+path, c.token)
+		if err != nil {
+			fmt.Printf("\nGET %s: error: %v\n", path, err)
+			continue
+		}
+		fmt.Printf("\nGET %s: HTTP %d\n", path, status)
+		if status >= 200 && status < 300 {
+			fmt.Print(responseShape(responseBody))
+			printCandidateIDs(responseBody)
+			if raw {
+				printRaw(responseBody)
+			}
+			continue
+		}
+		if raw || (status != http.StatusNotFound && status != http.StatusMethodNotAllowed) {
+			fmt.Println(truncateForError(responseBody))
+		}
+	}
+	return nil
 }
 
 func postJSON(ctx context.Context, httpClient *http.Client, apiURL, bearerToken string, body any) (int, []byte, error) {
@@ -235,19 +322,112 @@ func postJSON(ctx context.Context, httpClient *http.Client, apiURL, bearerToken 
 	return resp.StatusCode, responseBody, nil
 }
 
+func getJSON(ctx context.Context, httpClient *http.Client, apiURL, bearerToken string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("read response: %w", err)
+	}
+	return resp.StatusCode, responseBody, nil
+}
+
 func printResponse(endpoint string, status int, body []byte, raw bool) {
 	fmt.Printf("\n== %s ==\n", endpoint)
 	fmt.Printf("http: %d\n", status)
 	fmt.Print(responseShape(body))
+	printDomainSummary(endpoint, body)
 	if raw {
-		var pretty bytes.Buffer
-		if err := json.Indent(&pretty, body, "", "  "); err == nil {
-			fmt.Println("raw:")
-			fmt.Println(pretty.String())
-		} else {
-			fmt.Println("raw:")
-			fmt.Println(string(body))
+		printRaw(body)
+	}
+}
+
+func printDomainSummary(endpoint string, body []byte) {
+	switch endpoint {
+	case "kpiData":
+		var response kpiResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			fmt.Printf("typed parse: failed: %v\n", err)
+			return
 		}
+		fmt.Printf("typed parse: success=%t community=%.3f feed=%.3f remainingDemand=%.3f autarky=%.2f%% ownConsumption=%.2f%% grouped=%d\n",
+			response.Success,
+			response.Data.Community,
+			response.Data.Feed,
+			response.Data.RemainingDemand,
+			response.Data.Autarky,
+			response.Data.OwnConsumption,
+			len(response.Data.CommunityGrouped),
+		)
+		for _, group := range response.Data.CommunityGrouped {
+			fmt.Printf("  communityGrouped[%s]=%.3f\n", group.EnixiGenerationType, group.Sum)
+		}
+	case "meterdata":
+		var response meterResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			fmt.Printf("typed parse: failed: %v\n", err)
+			return
+		}
+		fmt.Printf("typed parse: success=%t s=%t substitutesOrMissingData=%t sumGeneration=%.3f sumFeed=%.3f\n",
+			response.Success,
+			response.S,
+			response.Data.SubstitutesOrMissingData,
+			response.Data.SumGeneration,
+			response.Data.SumFeed,
+		)
+		printSeriesSummary("generationSeries", response.Data.GenerationSeries)
+		printSeriesSummary("feedSeries", response.Data.FeedSeries)
+	}
+}
+
+func printSeriesSummary(label string, series []meterSeriesPoint) {
+	if len(series) == 0 {
+		fmt.Printf("  %s: len=0\n", label)
+		return
+	}
+	total := 0.0
+	nullMethods := 0
+	methodCounts := map[string]int{}
+	for _, point := range series {
+		total += point.Value
+		if point.Methods == nil {
+			nullMethods++
+			continue
+		}
+		methodCounts[*point.Methods]++
+	}
+	fmt.Printf("  %s: len=%d first=%s last=%s valueSum=%.3f nullMethods=%d methods=%s\n",
+		label,
+		len(series),
+		series[0].Date.Format("2006-01-02T15:04:05-07:00"),
+		series[len(series)-1].Date.Format("2006-01-02T15:04:05-07:00"),
+		total,
+		nullMethods,
+		formatMethodCounts(methodCounts),
+	)
+}
+
+func printRaw(body []byte) {
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, body, "", "  "); err == nil {
+		fmt.Println("raw:")
+		fmt.Println(pretty.String())
+	} else {
+		fmt.Println("raw:")
+		fmt.Println(string(body))
 	}
 }
 
@@ -341,6 +521,14 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	return parsed
 }
 
+func mustLoadLocation(name string) *time.Location {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.Local
+	}
+	return loc
+}
+
 func stringField(m map[string]any, key string) string {
 	value, ok := m[key].(string)
 	if !ok {
@@ -378,9 +566,106 @@ func truncateForError(body []byte) string {
 	return text
 }
 
+func endpointHint(status int, body []byte) string {
+	if status != http.StatusNotFound || !strings.Contains(string(body), "EnergyCommunity") {
+		return ""
+	}
+	return "\n\nhint: login worked, but this API route did not find that energy community ID. The path likely expects the portal's internal energy community model ID, not the RC/GC market participant code. Run with -discover -raw or open the EDA portal and copy the ID from the energy-community URL."
+}
+
 func sampleString(value string) string {
 	if len(value) > 80 {
 		return value[:80] + "..."
 	}
 	return value
+}
+
+func (t *edaLocalTime) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	parsed, err := time.ParseInLocation("2006-01-02T15:04:05", value, viennaLocation)
+	if err != nil {
+		return err
+	}
+	t.Time = parsed
+	return nil
+}
+
+func formatMethodCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s:%d", key, counts[key]))
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func printCandidateIDs(body []byte) {
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return
+	}
+	seen := map[string]bool{}
+	var candidates []string
+	collectCandidateIDs(value, "", seen, &candidates)
+	sort.Strings(candidates)
+	if len(candidates) == 0 {
+		return
+	}
+	fmt.Println("candidate id fields:")
+	for _, candidate := range candidates {
+		fmt.Printf("  %s\n", candidate)
+	}
+}
+
+func collectCandidateIDs(value any, path string, seen map[string]bool, candidates *[]string) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			lowerKey := strings.ToLower(key)
+			if strings.Contains(lowerKey, "id") || lowerKey == "code" || strings.Contains(lowerKey, "participant") {
+				switch typed := child.(type) {
+				case string:
+					addCandidateID(childPath, typed, seen, candidates)
+				case float64:
+					addCandidateID(childPath, fmt.Sprintf("%.0f", typed), seen, candidates)
+				}
+			}
+			collectCandidateIDs(child, childPath, seen, candidates)
+		}
+	case []any:
+		limit := len(v)
+		if limit > 5 {
+			limit = 5
+		}
+		for i := 0; i < limit; i++ {
+			collectCandidateIDs(v[i], fmt.Sprintf("%s[%d]", path, i), seen, candidates)
+		}
+	}
+}
+
+func addCandidateID(path, value string, seen map[string]bool, candidates *[]string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	line := path + "=" + value
+	if seen[line] {
+		return
+	}
+	seen[line] = true
+	*candidates = append(*candidates, line)
 }

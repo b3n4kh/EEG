@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+
+	"github.com/ben/eeg-sumsum/internal/eda"
 )
 
 type Config struct {
@@ -14,6 +16,7 @@ type Config struct {
 	AdminUsername string
 	AdminPassword string
 	AdminAPIToken string
+	EDA           eda.Config
 	DevMode       bool
 }
 
@@ -25,7 +28,16 @@ func Load() (Config, error) {
 		AdminUsername: os.Getenv("ADMIN_USERNAME"),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
 		AdminAPIToken: os.Getenv("ADMIN_API_TOKEN"),
-		DevMode:       env("APP_ENV", "dev") == "dev",
+		EDA: eda.Config{
+			BaseURL:           env("EDA_BASE_URL", eda.DefaultBaseURL),
+			Username:          os.Getenv("EDA_USERNAME"),
+			Password:          os.Getenv("EDA_PASSWORD"),
+			CommunityID:       os.Getenv("EDA_COMMUNITY_ID"),
+			MeteringPointID:   os.Getenv("EDA_METERING_POINT_ID"),
+			MeteringPointName: os.Getenv("EDA_METERING_POINT_NAME"),
+			GroupBy:           env("EDA_GROUP_BY", "day"),
+		},
+		DevMode: env("APP_ENV", "dev") == "dev",
 	}
 	if cfg.SessionSecret == "" {
 		if !cfg.DevMode {
