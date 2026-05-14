@@ -18,6 +18,7 @@ import (
 )
 
 const defaultBaseURL = "https://prod-api.eda-portal.at/api"
+const defaultGroupBy = "day"
 
 var viennaLocation = mustLoadLocation("Europe/Vienna")
 
@@ -28,7 +29,6 @@ type options struct {
 	communityID string
 	from        string
 	to          string
-	groupBy     string
 	endpoint    string
 	raw         bool
 	discover    bool
@@ -126,7 +126,7 @@ func run() error {
 
 	body := map[string]any{
 		"energyCommunityId": opts.communityID,
-		"groupBy":           opts.groupBy,
+		"groupBy":           defaultGroupBy,
 		"time": map[string]any{
 			"in": map[string]string{
 				"min": opts.from,
@@ -134,7 +134,7 @@ func run() error {
 			},
 		},
 	}
-	fmt.Printf("request: community=%s groupBy=%s from=%s to=%s\n", opts.communityID, opts.groupBy, opts.from, opts.to)
+	fmt.Printf("request: community=%s groupBy=%s from=%s to=%s\n", opts.communityID, defaultGroupBy, opts.from, opts.to)
 
 	for _, endpoint := range endpointList(opts.endpoint) {
 		status, responseBody, err := c.post(ctx, endpoint, body)
@@ -158,7 +158,6 @@ func parseFlags() options {
 	flag.StringVar(&opts.communityID, "community-id", envOr("EDA_COMMUNITY_ID", ""), "EDA energy community ID")
 	flag.StringVar(&opts.from, "from", envOr("EDA_FROM", defaultFrom), "range start, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
 	flag.StringVar(&opts.to, "to", envOr("EDA_TO", defaultTo), "range end, YYYY-MM-DD or YYYY-MM-DDTHH:MM")
-	flag.StringVar(&opts.groupBy, "group-by", envOr("EDA_GROUP_BY", "day"), "EDA groupBy value: day, month, or year")
 	flag.StringVar(&opts.endpoint, "endpoint", envOr("EDA_ENDPOINT", "both"), "endpoint to verify: both, kpiData, or meterdata")
 	flag.BoolVar(&opts.raw, "raw", envBool("EDA_RAW"), "print pretty formatted raw endpoint JSON")
 	flag.BoolVar(&opts.discover, "discover", envBool("EDA_DISCOVER"), "try likely endpoints that list accessible communities before verifying data endpoints")
@@ -181,7 +180,6 @@ func parseFlags() options {
 	opts.communityID = strings.TrimSpace(opts.communityID)
 	opts.from = normalizeRangeEndpoint(opts.from, true)
 	opts.to = normalizeRangeEndpoint(opts.to, false)
-	opts.groupBy = strings.TrimSpace(opts.groupBy)
 	opts.endpoint = strings.TrimSpace(opts.endpoint)
 	return opts
 }
@@ -202,11 +200,6 @@ func (opts options) validate() error {
 	}
 	if opts.baseURL == "" {
 		return errors.New("base URL is required")
-	}
-	switch opts.groupBy {
-	case "day", "month", "year":
-	default:
-		return fmt.Errorf("unsupported groupBy %q, expected day, month, or year", opts.groupBy)
 	}
 	if len(endpointList(opts.endpoint)) == 0 {
 		return fmt.Errorf("unsupported endpoint %q, expected both, kpiData, or meterdata", opts.endpoint)

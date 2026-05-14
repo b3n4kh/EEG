@@ -132,11 +132,10 @@ func TestEDAImportAPIImportsIdempotently(t *testing.T) {
 	edaServer := fakeEDAServer(t)
 	defer edaServer.Close()
 	app := New(database, true, eda.Config{
-		BaseURL:       edaServer.URL,
-		PortalBaseURL: edaServer.URL,
-		Username:      "user@example.com",
-		Password:      "secret",
-		CommunityID:   "community-1",
+		BaseURL:     edaServer.URL,
+		Username:    "user@example.com",
+		Password:    "secret",
+		CommunityID: "community-1",
 	})
 
 	first := postEDAImport(t, app.Routes())

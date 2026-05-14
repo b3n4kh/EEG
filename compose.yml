@@ -13,6 +13,12 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:?ADMIN_USERNAME is required}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      EDA_BASE_URL: ${EDA_BASE_URL:-https://prod-api.eda-portal.at/api}
+      EDA_USERNAME: ${EDA_USERNAME:-}
+      EDA_PASSWORD: ${EDA_PASSWORD:-}
+      EDA_COMMUNITY_ID: ${EDA_COMMUNITY_ID:-}
+      EDA_METERING_POINTS: ${EDA_METERING_POINTS:-}
     volumes:
       - eeg_data:/data
     healthcheck:

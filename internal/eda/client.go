@@ -22,9 +22,8 @@ import (
 )
 
 const (
-	DefaultBaseURL       = "https://prod-api.eda-portal.at/api"
-	DefaultPortalBaseURL = "https://prod.eda-portal.at/api"
-	defaultGroupBy       = "day"
+	DefaultBaseURL = "https://prod-api.eda-portal.at/api"
+	defaultGroupBy = "day"
 )
 
 var viennaLocation = mustLoadLocation("Europe/Vienna")
@@ -61,12 +60,10 @@ const (
 
 type Config struct {
 	BaseURL        string
-	PortalBaseURL  string
 	Username       string
 	Password       string
 	CommunityID    string
 	MeteringPoints string
-	GroupBy        string
 }
 
 func (c Config) Enabled() bool {
@@ -80,18 +77,10 @@ func (c Config) normalized() Config {
 	if c.BaseURL == "" {
 		c.BaseURL = DefaultBaseURL
 	}
-	c.PortalBaseURL = strings.TrimRight(strings.TrimSpace(c.PortalBaseURL), "/")
-	if c.PortalBaseURL == "" {
-		c.PortalBaseURL = DefaultPortalBaseURL
-	}
 	c.Username = strings.TrimSpace(c.Username)
 	c.Password = strings.TrimSpace(c.Password)
 	c.CommunityID = strings.TrimSpace(c.CommunityID)
 	c.MeteringPoints = strings.TrimSpace(c.MeteringPoints)
-	c.GroupBy = strings.TrimSpace(c.GroupBy)
-	if c.GroupBy == "" {
-		c.GroupBy = defaultGroupBy
-	}
 	return c
 }
 
@@ -104,17 +93,13 @@ func (c Client) Fetch(ctx context.Context, from, to time.Time) (imports.ParsedFi
 	cfg := c.Config.normalized()
 	slog.Info("starting EDA import",
 		"community_id", cfg.CommunityID,
-		"group_by", cfg.GroupBy,
+		"group_by", defaultGroupBy,
 		"from", formatEDATime(from),
 		"to", formatEDATime(to),
 		"base_url", cfg.BaseURL,
-		"portal_base_url", cfg.PortalBaseURL,
 	)
 	if !cfg.Enabled() {
 		return imports.ParsedFile{}, errors.New("EDA import is not configured")
-	}
-	if cfg.GroupBy != defaultGroupBy {
-		return imports.ParsedFile{}, fmt.Errorf("EDA import only supports day-wise data; got groupBy %q", cfg.GroupBy)
 	}
 	if !to.After(from) && !to.Equal(from) {
 		return imports.ParsedFile{}, errors.New("EDA import end must be after start")
@@ -137,7 +122,7 @@ func (c Client) Fetch(ctx context.Context, from, to time.Time) (imports.ParsedFi
 	}
 	requestBody := requestPayload{
 		EnergyCommunityID: cfg.CommunityID,
-		GroupBy:           cfg.GroupBy,
+		GroupBy:           defaultGroupBy,
 		Time: requestTime{In: requestRange{
 			Min: formatEDATime(from),
 			Max: formatEDATime(to),
@@ -364,7 +349,7 @@ func (c Client) fetchConsumptionSeries(ctx context.Context, httpClient *http.Cli
 		EnergyCommunityID: cfg.CommunityID,
 		Name:              meteringPointID,
 	}
-	apiURL := cfg.PortalBaseURL + "/consumptionsurya/" + kind + "/" + url.PathEscape(meteringPointID)
+	apiURL := cfg.BaseURL + "/consumptionsurya/" + kind + "/" + url.PathEscape(meteringPointID)
 	slog.Debug("EDA HTTP series request", "url", apiURL, "kind", kind, "metering_point_id", meteringPointID, "group_by", request.GroupBy, "from", request.Time.In.Min, "to", request.Time.In.Max)
 	raw, err := postRaw(ctx, httpClient, apiURL, token, body)
 	if err != nil {

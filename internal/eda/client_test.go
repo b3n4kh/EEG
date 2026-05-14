@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -68,11 +67,10 @@ func TestFetchParsesEDAResponses(t *testing.T) {
 	from := time.Date(2026, 5, 6, 0, 0, 0, 0, viennaLocation)
 	to := time.Date(2026, 5, 6, 23, 45, 0, 0, viennaLocation)
 	parsed, err := (Client{Config: Config{
-		BaseURL:       server.URL,
-		PortalBaseURL: server.URL,
-		Username:      "user@example.com",
-		Password:      "secret",
-		CommunityID:   "community-1",
+		BaseURL:     server.URL,
+		Username:    "user@example.com",
+		Password:    "secret",
+		CommunityID: "community-1",
 	}}).Fetch(context.Background(), from, to)
 	if err != nil {
 		t.Fatal(err)
@@ -107,20 +105,6 @@ func TestFetchParsesEDAResponses(t *testing.T) {
 	}
 	if len(account.MeteringPointIDs) != 2 {
 		t.Fatalf("participant meters = %d, want 2", len(account.MeteringPointIDs))
-	}
-}
-
-func TestFetchRejectsNonDayGroupBy(t *testing.T) {
-	_, err := (Client{Config: Config{
-		BaseURL:       "http://127.0.0.1",
-		PortalBaseURL: "http://127.0.0.1",
-		Username:      "user@example.com",
-		Password:      "secret",
-		CommunityID:   "community-1",
-		GroupBy:       "quarter-hour",
-	}}).Fetch(context.Background(), time.Now(), time.Now())
-	if err == nil || !strings.Contains(err.Error(), "only supports day-wise data") {
-		t.Fatalf("err = %v, want day-wise groupBy error", err)
 	}
 }
 

@@ -161,13 +161,11 @@ curl -fsS http://localhost:8080/healthz
 | `ADMIN_USERNAME` | leer | Erstellt oder aktualisiert Admin beim Start |
 | `ADMIN_PASSWORD` | leer | Passwort fuer Bootstrap-Admin |
 | `ADMIN_API_TOKEN` | leer | Bearer Token fuer XLSX Uploads |
-| `EDA_BASE_URL` | `https://prod-api.eda-portal.at/api` | EDA API Basis-URL fuer Login und Energy-Community Details |
-| `EDA_PORTAL_BASE_URL` | `https://prod.eda-portal.at/api` | EDA Portal API Basis-URL fuer `consumptionsurya` Messreihen |
+| `EDA_BASE_URL` | `https://prod-api.eda-portal.at/api` | EDA API Basis-URL fuer Login, Energy-Community Details und Messreihen |
 | `EDA_USERNAME` | leer | EDA Portal Login |
 | `EDA_PASSWORD` | leer | EDA Portal Passwort |
 | `EDA_COMMUNITY_ID` | leer | Interne EDA Energy-Community-ID |
 | `EDA_METERING_POINTS` | leer | Optionaler Fallback, falls die Community-Detail-API keine Zaehlpunkte liefert: `ZP_ID:CONSUMPTION,ZP_ID:GENERATION` |
-| `EDA_GROUP_BY` | `day` | EDA Import unterstuetzt nur Tageswerte; Wert muss `day` sein |
 
 ## API
 

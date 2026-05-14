@@ -30,12 +30,10 @@ func Load() (Config, error) {
 		AdminAPIToken: os.Getenv("ADMIN_API_TOKEN"),
 		EDA: eda.Config{
 			BaseURL:        env("EDA_BASE_URL", eda.DefaultBaseURL),
-			PortalBaseURL:  env("EDA_PORTAL_BASE_URL", eda.DefaultPortalBaseURL),
 			Username:       os.Getenv("EDA_USERNAME"),
 			Password:       os.Getenv("EDA_PASSWORD"),
 			CommunityID:    os.Getenv("EDA_COMMUNITY_ID"),
 			MeteringPoints: os.Getenv("EDA_METERING_POINTS"),
-			GroupBy:        env("EDA_GROUP_BY", "day"),
 		},
 		DevMode: env("APP_ENV", "dev") == "dev",
 	}
